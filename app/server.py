@@ -10,6 +10,7 @@ Auth : validation Telegram initData (HMAC-SHA256, cf. docs Mini Apps).
 """
 import os, hmac, hashlib, json, time, subprocess, threading, queue, tempfile, io, re, wave
 import asyncio, logging, urllib.parse
+import numpy as np
 from fastapi import FastAPI, Request, UploadFile, Form, HTTPException
 from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
@@ -201,12 +202,30 @@ def synthesize(text: str, model_path: str | None = None) -> bytes:
             from piper import PiperVoice
             voice = _voices[model_path] = PiperVoice.load(model_path)
         buf = io.BytesIO()
+        parts = []
+        for chunk in voice.synthesize(t):
+            parts.append(np.frombuffer(chunk.audio_int16_bytes, dtype=np.int16))
+        audio = np.concatenate(parts).astype(np.float32) if parts else np.zeros(0, dtype=np.float32)
+        # Dégrésillement (demande Greg, constaté : pics à pleine échelle + discontinuités
+        # de synthèse Piper, ~1/43 ms sur siwis) : interpolation locale des sauts brutaux,
+        # puis limite de crête à 89 %. RMS quasi inchangé (-1 %), timbre préservé.
+        for _ in range(3):
+            d = np.abs(np.diff(audio))
+            bad = np.where(d > 15000)[0]
+            if not len(bad):
+                break
+            for i in bad:
+                if i + 2 < len(audio):
+                    audio[i + 1] = (audio[i] + audio[i + 2]) / 2
+        peak = float(np.abs(audio).max()) if audio.size else 0.0
+        if peak > 32767 * 0.89:
+            audio = audio * (32767 * 0.89 / peak)
+        audio = audio.astype(np.int16)
         with wave.open(buf, "wb") as w:
             w.setnchannels(1)
             w.setsampwidth(2)
             w.setframerate(voice.config.sample_rate)
-            for chunk in voice.synthesize(t):
-                w.writeframes(chunk.audio_int16_bytes)
+            w.writeframes(audio.tobytes())
         return buf.getvalue()
 
 # ---------- routes ----------
