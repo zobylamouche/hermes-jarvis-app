@@ -110,7 +110,7 @@ header .s { font-size:10px; color:#5a8a96; letter-spacing:2px; margin-top:2px; }
 <div class="controls">
   <button id="retryMic" style="display:none">🔓 RELANCER LE MICRO</button>
   <div class="microw">
-    <button id="mic" title="Maintenir pour parler">🎙</button>
+    <button id="mic" title="Appui : enregistrer · Rappui : envoyer">🎙</button>
     <div class="inrow">
       <input id="txt" placeholder="Écrire à Jarvis…" autocomplete="off">
       <button id="send">➤</button>
@@ -253,8 +253,8 @@ async function brain(text, bubble, onDone) {
 $('send').onclick = () => { const v = txt.value.trim(); if (v) { txt.value = ''; brain(v, true); } };
 txt.addEventListener('keydown', e => { if (e.key === 'Enter') $('send').onclick(); });
 
-/* --- VOCALE : maintenir le micro pour parler --- */
-let mediaRec = null, chunks = [], recStart = 0;
+/* --- VOCALE : un appui = conversation (enregistre), rappui = stop et envoie --- */
+let mediaRec = null, chunks = [], recStart = 0, recOn = false;
 const mic = $('mic');
 
 async function startRec() {
@@ -265,21 +265,20 @@ async function startRec() {
     mediaRec.ondataavailable = e => chunks.push(e.data);
     mediaRec.onstop = () => {
       stream.getTracks().forEach(t => t.stop());
+      recOn = false;
       const dur = Date.now() - recStart;
-      if (dur < 700) { statusTo('TROP COURT — MAINTIENS LE BOUTON'); return; }
+      if (dur < 700) { statusTo('TROP COURT — RÉESSAIE'); return; }
       const blob = new Blob(chunks, { type: mediaRec.mimeType || 'audio/webm' });
       sendVoice(blob);
     };
-    mediaRec.start(); recStart = Date.now();
-    mic.classList.add('rec'); statusTo('🎤 JARVIS ÉCOUTE…', 'listen');
+    mediaRec.start(); recStart = Date.now(); recOn = true;
+    mic.classList.add('rec'); statusTo('🎤 JARVIS ÉCOUTE… (rappui = envoyer)', 'listen');
   } catch (e) { statusTo('MICRO REFUSÉ — AUTORISE L\'ACCÈS'); }
 }
 function stopRec() {
   if (mediaRec && mediaRec.state === 'recording') { mediaRec.stop(); mic.classList.remove('rec'); }
 }
-mic.addEventListener('pointerdown', e => { e.preventDefault(); startRec(); });
-mic.addEventListener('pointerup', stopRec);
-mic.addEventListener('pointerleave', stopRec);
+mic.addEventListener('click', e => { e.preventDefault(); recOn ? stopRec() : startRec(); });
 
 async function sendVoice(blob) {
   statusTo('TRANSCRIPTION…', 'think');
