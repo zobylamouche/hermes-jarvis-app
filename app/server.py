@@ -8,10 +8,10 @@ Endpoints :
   POST /api/voice   -> multipart audio -> Whisper (fr) -> cerveau
 Auth : validation Telegram initData (HMAC-SHA256, cf. docs Mini Apps).
 """
-import os, hmac, hashlib, json, time, subprocess, threading, queue, tempfile
+import os, hmac, hashlib, json, time, subprocess, threading, queue, tempfile, io, re, wave
 import urllib.parse
 from fastapi import FastAPI, Request, UploadFile, Form, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 import uvicorn
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -105,6 +105,49 @@ def transcribe(audio_path: str) -> str:
         )
         return " ".join(s.text.strip() for s in segments).strip()
 
+# ---------- Piper TTS (chargé au premier vocal, ensuite en RAM) ----------
+TTS_MODEL = os.environ.get("JARVIS_TTS_MODEL", "/opt/jarvis/models/piper/fr_FR-tom-medium.onnx")
+TTS_MAX_CHARS = 500
+_piper = None
+_piper_lock = threading.Lock()
+
+_EMOJI_RE = re.compile(r"[\U00010000-\U0010FFFF\u2600-\u27BF\uFE0F\u200D\u2190-\u21FF]")
+
+def clean_for_tts(text: str) -> str:
+    t = re.sub(r"```.*?```", " (bloc de code, je te l'envoie en texte) ", text, flags=re.S)
+    t = re.sub(r"https?://\S+", " lien ", t)
+    t = re.sub(r"[*_`#>|~\[\]]", " ", t)
+    t = _EMOJI_RE.sub(" ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    if len(t) > TTS_MAX_CHARS:
+        cut = t[:TTS_MAX_CHARS]
+        for sep in ".!?\n":
+            idx = cut.rfind(sep)
+            if idx > TTS_MAX_CHARS // 2:
+                cut = cut[:idx + 1]
+                break
+        t = cut.strip()
+    return t
+
+def synthesize(text: str) -> bytes:
+    """Rend un WAV 16 bits mono, PCM, prêt à jouer dans le navigateur."""
+    global _piper
+    t = clean_for_tts(text)
+    if not t:
+        raise HTTPException(400, "rien à dire")
+    with _piper_lock:
+        if _piper is None:
+            from piper import PiperVoice
+            _piper = PiperVoice.load(TTS_MODEL)
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(_piper.config.sample_rate)
+            for chunk in _piper.synthesize(t):
+                w.writeframes(chunk.audio_int16_bytes)
+        return buf.getvalue()
+
 # ---------- routes ----------
 @app.get("/")
 def index():
@@ -138,6 +181,17 @@ async def api_voice(request: Request, file: UploadFile, note: str = Form("")):
         return JSONResponse({"transcription": text, "reply": reply})
     finally:
         os.unlink(audio_path)
+
+@app.post("/api/tts")
+async def api_tts(request: Request):
+    """Texte -> audio WAV (voix Jarvis). Auth initData obligatoire."""
+    validate_init_data(request.headers.get("X-Init-Data", ""))
+    body = await request.json()
+    text = (body.get("text") or "").strip()
+    if not text:
+        raise HTTPException(400, "texte vide")
+    audio = synthesize(text)          # laisse remonter les HTTPException
+    return Response(audio, media_type="audio/wav", headers={"Cache-Control": "no-store"})
 
 @app.get("/health")
 def health():

@@ -46,6 +46,9 @@ header .s { font-size:10px; color:#5a8a96; letter-spacing:2px; margin-top:2px; }
 .status { font-size:11px; letter-spacing:2px; color:#5a8a96; margin-bottom:8px; min-height:14px; }
 .status.listen { color:#7fff9e; text-shadow:0 0 8px #7fff9e; }
 .status.think  { color:#ffd166; text-shadow:0 0 8px #ffd166; }
+#voice { position:absolute; top:12px; right:12px; width:36px; height:36px; border-radius:50%;
+  border:1px solid rgba(0,229,255,.35); background:rgba(0,229,255,.08); color:var(--cy);
+  font-size:16px; cursor:pointer; }
 
 /* LOG */
 #log { flex:1; overflow-y:auto; padding:6px 14px 10px; }
@@ -90,6 +93,7 @@ header .s { font-size:10px; color:#5a8a96; letter-spacing:2px; margin-top:2px; }
     <div class="core"></div>
   </div>
   <div class="status" id="status">SYSTÈME OPÉRATIONNEL</div>
+  <button id="voice" title="Voix on/off">🔊</button>
 </header>
 <div id="log"></div>
 <div class="controls">
@@ -112,11 +116,48 @@ const log = $('log'), status = $('status'), txt = $('txt');
 const INIT = tg.initData || '';
 function scroll() { log.scrollTop = log.scrollHeight; }
 function statusTo(s, cls) { status.textContent = s; status.className = 'status ' + (cls||''); }
+
+/* --- VOIX DE SORTIE (TTS local Piper) --- */
+let voiceOn = localStorage.getItem('jarvis_voice') !== '0';
+const vbtn = $('voice');
+vbtn.textContent = voiceOn ? '🔊' : '🔇';
+vbtn.onclick = () => {
+  voiceOn = !voiceOn;
+  localStorage.setItem('jarvis_voice', voiceOn ? '1' : '0');
+  vbtn.textContent = voiceOn ? '🔊' : '🔇';
+  if (!voiceOn) statusTo('VOIX COUPÉE');
+  else statusTo('VOIX ACTIVÉE');
+};
+
+let curAudio = null;
+async function speak(text) {
+  if (!voiceOn || !text) return;
+  try {
+    const r = await fetch('/api/tts', { method:'POST', headers: headers(), body: JSON.stringify({ text }) });
+    if (!r.ok) return;
+    const blob = await r.blob();
+    if (curAudio) { curAudio.pause(); }
+    curAudio = new Audio(URL.createObjectURL(blob));
+    statusTo('JARVIS PARLE…', 'listen');
+    await curAudio.play();          // sans geste utilisateur -> catch ci-dessous
+    curAudio.onended = () => statusTo('SYSTÈME OPÉRATIONNEL');
+  } catch (e) {
+    // autoplay refusé : la réponse affichée est cliquable pour l'entendre
+    statusTo('TOUCHE MA RÉPONSE POUR M\'ENTENDRE', 'think');
+  }
+}
+
 function addMsg(who, text) {
   const d = document.createElement('div');
   d.className = 'msg ' + (who === 'me' ? 'me' : 'jarvis');
   d.innerHTML = `<div class="who">${who === 'me' ? 'MOI' : 'JARVIS'}</div><div class="bubble"></div>`;
-  d.querySelector('.bubble').textContent = text;
+  const bubble = d.querySelector('.bubble');
+  bubble.textContent = text;
+  if (who === 'jarvis') {
+    bubble.style.cursor = 'pointer';
+    bubble.title = 'Touche pour entendre';
+    bubble.onclick = () => speak(text);
+  }
   log.appendChild(d); scroll();
 }
 
@@ -129,7 +170,9 @@ async function brain(text, bubble) {
     const r = await fetch('/api/chat', { method:'POST', headers: headers(), body: JSON.stringify({ text }) });
     if (r.status === 401) { addMsg('jarvis', '⚠️ Session Telegram invalide. Rouvre l\'app.'); return; }
     const j = await r.json();
-    addMsg('jarvis', j.reply || '…');
+    const reply = j.reply || '…';
+    addMsg('jarvis', reply);
+    speak(reply);
   } catch (e) {
     addMsg('jarvis', '🔌 Connexion perdue. Réessaie.');
   }
@@ -178,7 +221,9 @@ async function sendVoice(blob) {
     const j = await r.json();
     addMsg('me', '🎤 ' + (j.transcription || '…'));
     statusTo('TRAITEMENT…', 'think');
-    addMsg('jarvis', j.reply || '…');
+    const reply = j.reply || '…';
+    addMsg('jarvis', reply);
+    speak(reply);
   } catch (e) { addMsg('jarvis', '🔌 Vocal perdu. Réessaie.'); }
   statusTo('SYSTÈME OPÉRATIONNEL');
 }
