@@ -9,9 +9,10 @@ Endpoints :
 Auth : validation Telegram initData (HMAC-SHA256, cf. docs Mini Apps).
 """
 import os, hmac, hashlib, json, time, subprocess, threading, queue, tempfile, io, re, wave
-import urllib.parse
+import asyncio, logging, urllib.parse
 from fastapi import FastAPI, Request, UploadFile, Form, HTTPException
 from fastapi.responses import FileResponse, JSONResponse, Response
+from starlette.concurrency import run_in_threadpool
 import uvicorn
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -71,43 +72,51 @@ def validate_init_data(init_data: str) -> dict:
     except Exception as e:
         raise HTTPException(401, f"Auth Telegram refusée: {e}")
 
-# ---------- cerveau (queue sérialisée) ----------
-STYLE = ("Tu es Jarvis, l'assistant de Greg. Style conversationnel type ChatGPT : réponds en français, "
-         "naturel et très concis — 2 à 4 phrases courtes, pas de titres, pas de gras, pas de listes, "
-         "pas de topo ni de tableaux, sauf si Greg demande explicitement une analyse détaillée.\n\n")
+# ---------- cerveau : routage intention via jarvis_brain (LLM direct ~2 s / hermes pour les actions) ----------
+import sys as _sys
+_sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # /opt/jarvis
+import jarvis_brain
 
 def brain(text: str) -> str:
-    try:
-        r = subprocess.run([HERMES_BIN, "-z", STYLE + text], capture_output=True, text=True,
-                           timeout=TIMEOUT_BRAIN,
-                           env={**os.environ,
-                                "PATH": "/usr/local/lib/hermes-agent/.hermes/bin:/usr/local/bin:/usr/bin:/bin",
-                                "HOME": os.path.expanduser("~")})
-        out = (r.stdout or "").strip()
-        return out or "(réponse vide)"
-    except subprocess.TimeoutExpired:
-        return "⏱️ Trop long pour cette requête. Reformule plus court ?"
-    except Exception as e:
-        return f"🤖 Erreur interne: {e}"
+    return jarvis_brain.answer(text)
 
 # ---------- Whisper (chargé au premier vocal, ensuite en RAM) ----------
-_whisper = None
 _whisper_lock = threading.Lock()
+_whisper = {}   # nom -> modèle (tiny = rapide, small = qualité de repli)
+
+def _whisper_model(name: str):
+    with _whisper_lock:
+        if name not in _whisper:
+            from faster_whisper import WhisperModel
+            _whisper[name] = WhisperModel(name, device="cpu", compute_type="int8")
+        return _whisper[name]
+
+def _run_whisper(model, audio_path: str):
+    segments, _ = model.transcribe(
+        audio_path, language="fr", beam_size=1,
+        vad_filter=True,                      # coupe les silences : tue l'hallucination
+        vad_parameters={"min_silence_duration_ms": 500},
+        condition_on_previous_text=False,     # pas d'auto-répétition en boucle
+        no_speech_threshold=0.6, log_prob_threshold=-1.0,
+    )
+    parts, probs = [], []
+    for s in segments:
+        parts.append(s.text.strip())
+        if s.avg_logprob is not None:
+            probs.append(s.avg_logprob)
+    text = " ".join(p for p in parts if p).strip()
+    avg = sum(probs) / len(probs) if probs else -10.0
+    return text, avg
 
 def transcribe(audio_path: str) -> str:
-    global _whisper
-    with _whisper_lock:
-        if _whisper is None:
-            from faster_whisper import WhisperModel
-            _whisper = WhisperModel("small", device="cpu", compute_type="int8")
-        segments, _ = _whisper.transcribe(
-            audio_path, language="fr", beam_size=1,
-            vad_filter=True,                      # coupe les silences : tue l'hallucination
-            vad_parameters={"min_silence_duration_ms": 500},
-            condition_on_previous_text=False,     # pas d'auto-répétition en boucle
-            no_speech_threshold=0.6, log_prob_threshold=-1.0,
-        )
-        return " ".join(s.text.strip() for s in segments).strip()
+    """Transcription rapide : tiny partout (CPU du VPS : small = 26 s, inutilisable).
+    small ne sert qu'au cas limite où tiny renvoie du vide."""
+    t0 = time.time()
+    text, _ = _run_whisper(_whisper_model("tiny"), audio_path)
+    if not text:
+        text, _ = _run_whisper(_whisper_model("small"), audio_path)
+    logging.getLogger("jarvis").info("transcription %.1fs: %s", time.time() - t0, text[:80])
+    return text
 
 # ---------- Piper TTS (chargé au premier vocal, ensuite en RAM) ----------
 TTS_MODEL = os.environ.get("JARVIS_TTS_MODEL", "/opt/jarvis/models/piper/fr_FR-tom-medium.onnx")
@@ -153,6 +162,19 @@ def synthesize(text: str) -> bytes:
         return buf.getvalue()
 
 # ---------- routes ----------
+@app.on_event("startup")
+def warmup_models():
+    """Précharge Whisper et Piper en arrière-plan : le 1er vocal ne paie plus le chargement (~7 s)."""
+    def _warm():
+        try:
+            wav = synthesize("Systèmes en ligne.")
+            with open("/opt/jarvis/models/warmup.wav", "wb") as f:
+                f.write(wav)
+            transcribe("/opt/jarvis/models/warmup.wav")
+        except Exception:
+            pass
+    threading.Thread(target=_warm, daemon=True).start()
+
 @app.get("/")
 def index():
     return FileResponse(os.path.join(STATIC, "index.html"))
@@ -164,8 +186,25 @@ async def api_chat(request: Request):
     text = (body.get("text") or "").strip()
     if not text:
         raise HTTPException(400, "texte vide")
-    reply = brain(f"[Mini App Jarvis, message de {user.get('first_name','Greg')}] {text}")
+    reply = await run_in_threadpool(brain, f"[Mini App Jarvis, message de {user.get('first_name','Greg')}] {text}")
     return JSONResponse({"reply": reply})
+
+@app.post("/api/stt")
+async def api_stt(request: Request, file: UploadFile):
+    """Transcription seule (rapide) — le front affiche le texte tout de suite,
+    puis envoie la transcription à /api/chat. Sépare STT et cerveau."""
+    validate_init_data(request.headers.get("X-Init-Data", ""))
+    suffix = os.path.splitext(file.filename or "v.webm")[1] or ".webm"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir="/tmp") as tmp:
+        tmp.write(await file.read())
+        audio_path = tmp.name
+    try:
+        text = await run_in_threadpool(transcribe, audio_path)
+    finally:
+        os.unlink(audio_path)
+    if not text:
+        raise HTTPException(400, "vocal vide ou inaudible")
+    return JSONResponse({"transcription": text})
 
 @app.post("/api/voice")
 async def api_voice(request: Request, file: UploadFile, note: str = Form("")):
@@ -175,13 +214,13 @@ async def api_voice(request: Request, file: UploadFile, note: str = Form("")):
         tmp.write(await file.read())
         audio_path = tmp.name
     try:
-        text = transcribe(audio_path)
+        text = await run_in_threadpool(transcribe, audio_path)  # noqa: garde /api/voice (1 appel cerveau)
         if not text:
             raise HTTPException(400, "vocal vide ou inaudible")
         prompt = f"[Mini App Jarvis, VOCAL transcrit de {user.get('first_name','Greg')}] {text}"
         if note:
             prompt += f" — note jointe: {note}"
-        reply = brain(prompt)
+        reply = await run_in_threadpool(brain, prompt)
         return JSONResponse({"transcription": text, "reply": reply})
     finally:
         os.unlink(audio_path)
@@ -194,7 +233,7 @@ async def api_tts(request: Request):
     text = (body.get("text") or "").strip()
     if not text:
         raise HTTPException(400, "texte vide")
-    audio = synthesize(text)          # laisse remonter les HTTPException
+    audio = await run_in_threadpool(synthesize, text)   # laisse remonter les HTTPException
     return Response(audio, media_type="audio/wav", headers={"Cache-Control": "no-store"})
 
 @app.get("/health")

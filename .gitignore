@@ -5,3 +5,6 @@ __pycache__/
 *.session
 *.session-journal
 venv/
+.openrouter_key
+*.key
+.env

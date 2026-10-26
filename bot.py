@@ -61,10 +61,9 @@ def reply(chat_id, text, keyboard=None, parse="Markdown"):
     except Exception as e:
         log.error("sendMessage erreur: %s", e)
 
-# ---------- cerveau (sérialisé : un appel hermes à la fois) ----------
-STYLE = ("Tu es Jarvis, l'assistant de Greg. Style conversationnel type ChatGPT : réponds en français, "
-         "naturel et très concis — 2 à 4 phrases courtes, pas de titres, pas de gras, pas de listes, "
-         "pas de topo ni de tableaux, sauf si Greg demande explicitement une analyse détaillée.\n\n")
+# ---------- cerveau : routage intention via jarvis_brain (LLM direct ~2 s / hermes pour les actions) ----------
+import jarvis_brain
+
 brain_queue = queue.Queue()
 
 def brain_worker():
@@ -72,13 +71,7 @@ def brain_worker():
         chat_id, text = brain_queue.get()
         try:
             log.info("cerebra <- %s", text[:120])
-            r = subprocess.run([HERMES_BIN, "-z", STYLE + text],
-                               capture_output=True, text=True, timeout=TIMEOUT_BRAIN,
-                               env={**os.environ, "PATH": "/usr/local/lib/hermes-agent/.hermes/bin:/usr/local/bin:/usr/bin:/bin",
-                                    "HOME": os.path.expanduser("~")})
-            out = (r.stdout or "").strip()
-            if not out:
-                out = "(réponse vide — regarde les logs si ça persiste)"
+            out = jarvis_brain.answer(text) or "(réponse vide)"
             reply(chat_id, out)
         except subprocess.TimeoutExpired:
             reply(chat_id, "⏱️ Trop long pour cette requête (240 s). Reformule plus court ?")

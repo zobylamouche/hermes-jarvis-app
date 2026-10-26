@@ -215,15 +215,15 @@ async function sendVoice(blob) {
   const fd = new FormData();
   fd.append('file', blob, 'vocal.webm');
   try {
-    // /api/voice renvoie déjà {transcription, reply} : UN seul appel cerveau
-    const r = await fetch('/api/voice', { method:'POST', headers: { 'X-Init-Data': INIT }, body: fd });
+    // 1) STT seul : le texte s'affiche dès la transcription (pas d'attente cerveau)
+    const r = await fetch('/api/stt', { method:'POST', headers: { 'X-Init-Data': INIT }, body: fd });
     if (r.status === 401) { addMsg('jarvis', '⚠️ Session Telegram invalide.'); return; }
     const j = await r.json();
-    addMsg('me', '🎤 ' + (j.transcription || '…'));
+    const heard = j.transcription || '…';
+    addMsg('me', '🎤 ' + heard);
+    // 2) cerveau sur la transcription
     statusTo('TRAITEMENT…', 'think');
-    const reply = j.reply || '…';
-    addMsg('jarvis', reply);
-    speak(reply);
+    await brain(heard, false);
   } catch (e) { addMsg('jarvis', '🔌 Vocal perdu. Réessaie.'); }
   statusTo('SYSTÈME OPÉRATIONNEL');
 }
