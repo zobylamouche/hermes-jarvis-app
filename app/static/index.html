@@ -89,8 +89,6 @@ header .s { font-size:10px; color:#5a8a96; letter-spacing:2px; margin-top:2px; }
 #cont { width:44px; height:44px; border-radius:50%; border:1px solid rgba(0,229,255,.4);
   background:rgba(0,229,255,.1); color:var(--cy); font-size:18px; cursor:pointer; flex:none; }
 #cont.rec { border-color:#ff5470; color:#ff5470; box-shadow:0 0 16px rgba(255,84,112,.45); }
-#vu { display:none; width:100%; height:46px; margin-bottom:8px; background:rgba(0,15,25,.7);
-  border:1px solid rgba(0,229,255,.25); border-radius:10px; }
 ::-webkit-scrollbar { width:4px; } ::-webkit-scrollbar-thumb { background:var(--dim); border-radius:2px; }
 </style>
 </head>
@@ -110,7 +108,6 @@ header .s { font-size:10px; color:#5a8a96; letter-spacing:2px; margin-top:2px; }
 </header>
 <div id="log"></div>
 <div class="controls">
-  <canvas id="vu"></canvas>
   <div class="microw">
     <button id="cont" title="Mode continu : écoute puis réponse après 2 s de silence">🎧</button>
     <button id="mic" title="Maintenir pour parler">🎙</button>
@@ -307,15 +304,16 @@ async function sendVoice(blob) {
   statusTo('SYSTÈME OPÉRATIONNEL');
 }
 
-/* --- MODE CONTINU : vumètre analogique du micro + écoute auto ---
-   Le canvas dessine le signal réel du micro (spectre + niveau RMS) : si les
-   barres bougent, le téléphone voit bien la voix. Parole détectée →
+/* --- MODE CONTINU : l'œil de Jarvis suit la voix + écoute auto ---
+   Le réacteur EST le vumètre : niveau RMS du micro → échelle + éclat de
+   l'œil (montée rapide à la parole, retombée lente au silence). Si l'œil
+   s'anime quand tu parles, le téléphone capte ta voix. Parole détectée →
    enregistrement ; silence de 2 s → envoi, réponse, puis réécoute en boucle. */
-const contBtn = $('cont'), vu = $('vu'), vctx = vu.getContext('2d');
+const contBtn = $('cont'), reactorEl = $('reactor');
 let contOn = false, contStream = null, contAnalyser = null, contRAF = 0;
 let contRec = null, contChunks = [], contState = 'listening';   // listening | busy
-let noiseFloor = 0.006, speechStart = 0, lastVoice = 0;
-const TD = new Uint8Array(512), FQ = new Uint8Array(256);
+let noiseFloor = 0.006, speechStart = 0, lastVoice = 0, eyeLvl = 0;
+const TD = new Uint8Array(512);
 
 contBtn.onclick = () => contOn ? contStopAll() : contStart();
 
@@ -330,8 +328,8 @@ async function contStart() {
   const src = actx.createMediaStreamSource(contStream);
   contAnalyser = actx.createAnalyser(); contAnalyser.fftSize = 512;
   src.connect(contAnalyser);
-  contOn = true; contBtn.classList.add('rec'); vu.style.display = 'block';
-  contState = 'listening'; lastVoice = Date.now(); noiseFloor = 0.006; speechStart = 0;
+  contOn = true; contBtn.classList.add('rec');
+  contState = 'listening'; lastVoice = Date.now(); noiseFloor = 0.006; speechStart = 0; eyeLvl = 0;
   statusTo('MICRO DÉTECTÉ — PARLE, JE RÉPONDS APRÈS 2 S DE SILENCE', 'listen');
   loopVU();
 }
@@ -341,8 +339,8 @@ function contStopAll() {
   contRec = null;
   if (contStream) { contStream.getTracks().forEach(t => t.stop()); contStream = null; }
   cancelAnimationFrame(contRAF); contRAF = 0;
-  contOn = false; speechStart = 0; mic.classList.remove('rec');
-  vu.style.display = 'none'; contBtn.classList.remove('rec');
+  contOn = false; speechStart = 0; eyeLvl = 0; mic.classList.remove('rec'); contBtn.classList.remove('rec');
+  reactorEl.style.transform = ''; reactorEl.style.filter = '';
   contState = 'listening';
   if (!curSrc && !curAudio) statusTo('SYSTÈME OPÉRATIONNEL');
 }
@@ -357,25 +355,14 @@ function rmsLevel() {
 function loopVU() {
   if (!contOn) return;
   contRAF = requestAnimationFrame(loopVU);
-  const W = vu.width = Math.round(vu.clientWidth * (devicePixelRatio || 1));
-  const H = vu.height = Math.round(46 * (devicePixelRatio || 1));
-  contAnalyser.getByteFrequencyData(FQ);
-  vctx.clearRect(0, 0, W, H);
-  const n = 32, bw = W / n;                       // spectre façon HUD
-  for (let i = 0; i < n; i++) {
-    const v = FQ[Math.floor(i * FQ.length / n / 1.6)] / 255, h = Math.max(2, v * H * .92);
-    vctx.fillStyle = v > .75 ? '#ff5470' : v > .4 ? '#ffd166' : '#00eaff';
-    vctx.globalAlpha = .28 + v * .72;
-    vctx.fillRect(i * bw + 1, H - h, bw - 2, h);
-  }
-  vctx.globalAlpha = 1;
   const rms = rmsLevel();
   const thr = Math.max(.02, noiseFloor * 3);
   if (rms < thr) noiseFloor = noiseFloor * .97 + rms * .03;   // plancher de bruit adaptatif
-  const lvl = Math.min(1, rms / .12);                          // aiguille de niveau (VU)
-  vctx.strokeStyle = rms > thr ? '#00eaff' : '#1d5a66';
-  vctx.lineWidth = 2 * (devicePixelRatio || 1);
-  vctx.beginPath(); vctx.moveTo(0, H - 3); vctx.lineTo(lvl * W, H - 3); vctx.stroke();
+  /* l'œil EST le vumètre : échelle + éclat suivent le niveau vocal */
+  const target = Math.min(1, rms / .12);
+  eyeLvl += (target - eyeLvl) * (target > eyeLvl ? .45 : .08); // montée rapide, retombée lente
+  reactorEl.style.transform = `scale(${(1 + eyeLvl * .22).toFixed(3)})`;
+  reactorEl.style.filter = `brightness(${(1 + eyeLvl * 1.6).toFixed(2)}) saturate(${(1 + eyeLvl * .8).toFixed(2)})`;
   if (contState !== 'listening') return;     // pas de détection pendant que Jarvis parle/travaille
   if (rms > thr) {
     if (!speechStart) {                      // début de parole → on enregistre
