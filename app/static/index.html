@@ -402,7 +402,7 @@ function loopVU() {
   if (!contOn) return;
   contRAF = requestAnimationFrame(loopVU);
   const rms = rmsLevel();
-  const thr = Math.max(.02, noiseFloor * 3);
+  const thr = Math.max(.03, noiseFloor * 3.5);
   if (rms < thr) noiseFloor = noiseFloor * .97 + rms * .03;   // plancher de bruit adaptatif
   /* l'œil EST le vumètre : échelle + éclat suivent le niveau vocal */
   const target = Math.min(1, rms / .12);
@@ -411,7 +411,7 @@ function loopVU() {
   coreEl.style.filter = `brightness(${(1 + eyeLvl * 1.8).toFixed(2)})`;
   reactorEl.style.filter = `brightness(${(1 + eyeLvl * .6).toFixed(2)})`;
   if (contState !== 'listening' || recOn) return;   // pas de détection pendant que Jarvis parle/travaille ou pendant un push-to-talk
-  const thrStart = Math.max(.045, noiseFloor * 4);   // démarrage : voix franche, pas le bruit ambiant
+  const thrStart = Math.max(.06, noiseFloor * 5);   // démarrage : voix franche proche, pas le bruit ambiant (Greg: peu sensible)
   if (rms > thrStart) {
     if (!speechStart) {                      // début de parole
       speechStart = Date.now(); lastVoice = speechStart; contChunks = []; contVoiced = 0;
@@ -440,7 +440,7 @@ function contFinish() {
   const frames = Math.max(1, Math.round(dur / 16.7));
   const voicedRatio = contVoiced / frames;
   contVoiced = 0;
-  if (dur < 700 || voicedRatio < 0.2) {       // trop court ou bruit ambiant sans parole
+  if (dur < 700 || voicedRatio < 0.25) {       // trop court ou bruit ambiant sans parole
     statusTo(dur < 700 ? 'TROP COURT — REPARLE' : 'BRUIT SEUL — PAS DE PAROLE', 'listen');
     return;
   }
