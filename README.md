@@ -20,12 +20,30 @@ Puis :
 5. **Mini App** : sous-domaine → `A jarvis.votredomaine.tld VOTRE_IP` + site nginx (proxy → 127.0.0.1:8010) + `certbot --nginx` ; mets `JARVIS_APP_URL=https://jarvis.votredomaine.tld` dans `.env`
 6. Envoie `/start` à ton bot → conversation libre + bouton permanent **🤖 OUVRIR JARVIS**
 
+## Déployer sur une autre instance Hermes — sans prise de tête
+
+```bash
+git clone git@github.com:zobylamouche/hermes-jarvis-app.git
+cd hermes-jarvis-app && sudo ./install.sh
+```
+
+C'est tout. `install.sh` apporte **tout le nécessaire** : code + Mini App, cerveau (`jarvis_brain.py`),
+les 2 voix Piper (`models/piper/`, incluses au repo), la **mémoire de Jarvis**
+(`data/jarvis_memoire.md`), le venv avec `requirements.txt` et les 2 services systemd
+(chemin hermes auto-détecté). Idempotent : réinstaller n'écrase jamais `.env`, la mémoire
+existante, ni les données.
+
+Reste 3 choses, forcément locales à la machine cible :
+1. le **token du bot** (par @BotFather, ou réutilise le même bot — le token s'envoie par EMAIL, pas en chat)
+2. ton **chat id** dans `ALLOWED_CHAT_IDS`
+3. le **sous-domaine Mini App** (DNS + nginx + certbot) si tu veux le HUD vocal
+
 ## La Mini App (HUD façon Iron Man)
 
 Le bouton **🤖 OUVRIR JARVIS** lance la Mini App Telegram en plein écran :
 
 - Interface HUD : arc réacteur animé, style Stark Industries, en français
-- **Micro (maintenir pour parler)** → Whisper local (modèle *small*, français) → cerveau → réponse
+- **Micro (maintenir pour parler)** → Whisper local *tiny* (français) → cerveau → réponse parlée (Piper, voix réglable 🎚)
 - Texte libre aussi
 - Auth Telegram native : la signature `initData` (HMAC) est vérifiée à chaque appel — personne d'autre ne peut utiliser l'API
 - 100 % local : STT Whisper sur ta machine, pas de service cloud tiers
@@ -37,7 +55,7 @@ Le bouton **🤖 OUVRIR JARVIS** lance la Mini App Telegram en plein écran :
 - Pas de menus, pas de boutons à décision prédéfinie : Jarvis, c'est Jarvis
 
 ### À venir
-- **Phase 2 — voix** : vocaux entrants → Whisper (STT), réponses → Kokoro (TTS), 100 % local
+- Streaming STT partiel + réponse LLM en stream si la latence vocale redevient gênante
 
 ## Architecture
 
@@ -60,11 +78,16 @@ Telegram (ton bot) ← long polling ← bot.py (systemd jarvis-bot)
 ## Structure
 
 ```
-bot.py          le bot (polling, boutons, cerveau)
-install.sh      installation + unité systemd (auto-détecte le chemin hermes)
+bot.py          le bot (polling, cerveau)
+jarvis_brain.py cerveau partagé (conversation LLM direct / action hermes, mémoire persistante)
+app/            la Mini App (FastAPI + HUD, Piper TTS, Whisper STT)
+models/piper/   les 2 voix fr (incluses au repo)
+data/jarvis_memoire.md   la mémoire de Jarvis (commitée — édite-la pour lui apprendre)
+requirements.txt         dépendances python
+install.sh      installation + unités systemd (auto-détecte le chemin hermes)
 uninstall.sh    désinstallation (garde token/logs ; --purge pour tout effacer)
 .env            configuration (JAMAIS commité)
-data/           logs (jamais commité)
+data/           logs et historiques (jamais commités, sauf la mémoire)
 ```
 
 ## Dépannage

@@ -1,5 +1,6 @@
 .env
-data/
+data/*
+!data/jarvis_memoire.md
 __pycache__/
 *.log
 *.session
@@ -7,4 +8,3 @@ __pycache__/
 venv/
 .openrouter_key
 *.key
-.env

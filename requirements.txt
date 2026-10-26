@@ -1,0 +1,8 @@
+ctranslate2==4.8.4
+fastapi==0.162.0
+faster-whisper==1.2.1
+huggingface_hub==2.3.0
+onnxruntime==1.23.2
+piper-tts==1.8.0
+python-multipart==0.0.32
+uvicorn==0.54.0

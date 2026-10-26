@@ -20,6 +20,11 @@ if [ "$SRC" != "$PREFIX" ] && [ -d "$SRC/app" ]; then
 fi
 [ "$SRC" != "$PREFIX" ] && [ -f "$SRC/README.md" ] && install -m 644 "$SRC/README.md" "$PREFIX/README.md" || true
 [ "$SRC" != "$PREFIX" ] && [ -d "$SRC/models/piper" ] && cp -n "$SRC/models/piper/"*.onnx* "$PREFIX/models/piper/" 2>/dev/null || true
+# mémoire de Jarvis : copiée seulement si absente (un profil existant n'est jamais écrasé)
+if [ "$SRC" != "$PREFIX" ] && [ -f "$SRC/data/jarvis_memoire.md" ] && [ ! -f "$PREFIX/data/jarvis_memoire.md" ]; then
+  install -m 644 "$SRC/data/jarvis_memoire.md" "$PREFIX/data/jarvis_memoire.md"
+  echo "→ Mémoire de Jarvis installée ($PREFIX/data/jarvis_memoire.md)."
+fi
 
 # 2. .env : créé une seule fois, jamais écrasé par une réinstallation
 if [ ! -f "$PREFIX/.env" ]; then
