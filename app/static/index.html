@@ -117,7 +117,10 @@ const INIT = tg.initData || '';
 function scroll() { log.scrollTop = log.scrollHeight; }
 function statusTo(s, cls) { status.textContent = s; status.className = 'status ' + (cls||''); }
 
-/* --- VOIX DE SORTIE (TTS local Piper) --- */
+/* --- VOIX DE SORTIE (TTS local Piper) ---
+   L'audio passe par un AudioContext déverrouillé au premier appui : le contexte
+   créé pendant un geste utilisateur reste autorisé ensuite, donc Jarvis parle
+   tout seul après un vocal, même si le geste est expiré depuis 10 s. */
 let voiceOn = localStorage.getItem('jarvis_voice') !== '0';
 const vbtn = $('voice');
 vbtn.textContent = voiceOn ? '🔊' : '🔇';
@@ -129,18 +132,40 @@ vbtn.onclick = () => {
   else statusTo('VOIX ACTIVÉE');
 };
 
-let curAudio = null;
+let actx = null;
+function unlockAudio() {
+  try {
+    if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
+    if (actx.state === 'suspended') actx.resume();
+  } catch (e) {}
+}
+document.addEventListener('pointerdown', unlockAudio, true);   // capture : avant le micro
+document.addEventListener('touchstart', unlockAudio, { passive: true });
+
+let curSrc = null, curAudio = null;
 async function speak(text) {
   if (!voiceOn || !text) return;
   try {
     const r = await fetch('/api/tts', { method:'POST', headers: headers(), body: JSON.stringify({ text }) });
     if (!r.ok) return;
-    const blob = await r.blob();
-    if (curAudio) { curAudio.pause(); }
-    curAudio = new Audio(URL.createObjectURL(blob));
+    const buf = await r.arrayBuffer();
     statusTo('JARVIS PARLE…', 'listen');
-    await curAudio.play();          // sans geste utilisateur -> catch ci-dessous
-    curAudio.onended = () => statusTo('SYSTÈME OPÉRATIONNEL');
+    if (actx && actx.state === 'running') {
+      const audio = await actx.decodeAudioData(buf);
+      if (curSrc) { try { curSrc.stop(); } catch (e) {} }
+      curSrc = actx.createBufferSource();
+      curSrc.buffer = audio;
+      curSrc.connect(actx.destination);
+      curSrc.onended = () => statusTo('SYSTÈME OPÉRATIONNEL');
+      curSrc.start();
+    } else {
+      // repli : élément Audio classique (nécessite un geste récent)
+      const blob = new Blob([buf], { type: 'audio/wav' });
+      if (curAudio) { curAudio.pause(); }
+      curAudio = new Audio(URL.createObjectURL(blob));
+      await curAudio.play();
+      curAudio.onended = () => statusTo('SYSTÈME OPÉRATIONNEL');
+    }
   } catch (e) {
     // autoplay refusé : la réponse affichée est cliquable pour l'entendre
     statusTo('TOUCHE MA RÉPONSE POUR M\'ENTENDRE', 'think');
