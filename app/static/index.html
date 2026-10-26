@@ -168,10 +168,15 @@ document.addEventListener('pointerdown', unlockAudio, true);   // capture : avan
 document.addEventListener('touchstart', unlockAudio, { passive: true });
 
 let curSrc = null, curAudio = null;
+/* Anti auto-écoute (Greg) : pendant que Jarvis parle (haut-parleur), le VAD doit être muet,
+   sinon il s'entend lui-même et repart en boucle. Infinity = il parle ; timestamp = fini (+1 s de rémanence). */
+let speakGate = 0;
+const speakingNow = () => speakGate && (speakGate === Infinity || Date.now() - speakGate < 1000);
 const sbtn = $('stopvoice');
 function stopSpeaking() {
   if (curSrc) { try { curSrc.stop(); } catch (e) {} curSrc = null; }
   if (curAudio) { curAudio.pause(); curAudio = null; }
+  speakGate = Date.now();
   sbtn.style.display = 'none';
   statusTo('SYSTÈME OPÉRATIONNEL');
 }
@@ -199,6 +204,7 @@ async function speak(text, onDone) {
     if (!r.ok) { statusTo('VOIX INDISPONIBLE — RÉESSAIE', 'think'); if (onDone) onDone(); return; }
     const buf = await r.arrayBuffer();
     statusTo('JARVIS PARLE…', 'listen');
+    speakGate = Infinity;   // le VAD ne doit pas s'auto-écouter pendant la réponse
     sbtn.style.display = 'block';
     if (actx && actx.state === 'running') {
       const audio = await actx.decodeAudioData(buf);
@@ -206,7 +212,7 @@ async function speak(text, onDone) {
       curSrc = actx.createBufferSource();
       curSrc.buffer = audio;
       curSrc.connect(actx.destination);
-      curSrc.onended = () => { sbtn.style.display = 'none'; statusTo('SYSTÈME OPÉRATIONNEL'); if (onDone) onDone(); };
+      curSrc.onended = () => { sbtn.style.display = 'none'; speakGate = Date.now(); statusTo('SYSTÈME OPÉRATIONNEL'); if (onDone) onDone(); };
       curSrc.start();
     } else {
       // repli : élément Audio classique (nécessite un geste récent)
@@ -214,10 +220,11 @@ async function speak(text, onDone) {
       if (curAudio) { curAudio.pause(); }
       curAudio = new Audio(URL.createObjectURL(blob));
       await curAudio.play();
-      curAudio.onended = () => { sbtn.style.display = 'none'; statusTo('SYSTÈME OPÉRATIONNEL'); if (onDone) onDone(); };
+      curAudio.onended = () => { sbtn.style.display = 'none'; speakGate = Date.now(); statusTo('SYSTÈME OPÉRATIONNEL'); if (onDone) onDone(); };
     }
   } catch (e) {
     // autoplay refusé : la réponse affichée est cliquable pour l'entendre
+    speakGate = Date.now();
     sbtn.style.display = 'none';
     statusTo("TOUCHE MA RÉPONSE POUR M'ENTENDRE", 'think');
     if (onDone) onDone();
@@ -438,7 +445,7 @@ function loopVU() {
   coreEl.style.transform = `scale(${(1 + eyeLvl * .38).toFixed(3)})`;          // le noyau suit la voix
   coreEl.style.filter = `brightness(${(1 + eyeLvl * 1.8).toFixed(2)})`;
   reactorEl.style.filter = `brightness(${(1 + eyeLvl * .6).toFixed(2)})`;
-  if (contState !== 'listening' || recOn) return;   // pas de détection pendant que Jarvis parle/travaille ou pendant un push-to-talk
+  if (contState !== 'listening' || recOn || speakingNow()) return;   // muet si Jarvis parle (anti auto-écoute), pendant un push-to-talk ou quand il travaille
   const thrStart = Math.max(.06, noiseFloor * 5) / sens;   // démarrage : voix franche proche, réglable via ⚙
   if (rms > thrStart) {
     if (!speechStart) {                      // début de parole
