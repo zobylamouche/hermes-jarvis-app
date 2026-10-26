@@ -28,10 +28,16 @@ cd hermes-jarvis-app && sudo ./install.sh
 ```
 
 C'est tout. `install.sh` apporte **tout le nécessaire** : code + Mini App, cerveau (`jarvis_brain.py`),
-les 2 voix Piper (`models/piper/`, incluses au repo), la **mémoire de Jarvis**
-(`data/jarvis_memoire.md`), le venv avec `requirements.txt` et les 2 services systemd
-(chemin hermes auto-détecté). Idempotent : réinstaller n'écrase jamais `.env`, la mémoire
+les 2 voix Piper (`models/piper/`, incluses au repo), le venv avec `requirements.txt` et les 2 services
+systemd (chemin hermes auto-détecté). Idempotent : réinstaller n'écrase jamais `.env`, la mémoire
 existante, ni les données.
+
+**Ta mémoire n'est PAS dans git** (données perso). Après l'installation, synchronise-la depuis
+la machine qui la possède :
+
+```bash
+sudo ./sync_memoire.sh push root@<nouvelle-machine>     # ou : pull pour la récupérer
+```
 
 Reste 3 choses, forcément locales à la machine cible :
 1. le **token du bot** (par @BotFather, ou réutilise le même bot — le token s'envoie par EMAIL, pas en chat)
@@ -82,7 +88,8 @@ bot.py          le bot (polling, cerveau)
 jarvis_brain.py cerveau partagé (conversation LLM direct / action hermes, mémoire persistante)
 app/            la Mini App (FastAPI + HUD, Piper TTS, Whisper STT)
 models/piper/   les 2 voix fr (incluses au repo)
-data/jarvis_memoire.md   la mémoire de Jarvis (commitée — édite-la pour lui apprendre)
+sync_memoire.sh synchronise la mémoire de Jarvis entre machines (rsync, pas de git)
+data/jarvis_memoire.md   la mémoire de Jarvis (données perso, JAMAIS commitée)
 requirements.txt         dépendances python
 install.sh      installation + unités systemd (auto-détecte le chemin hermes)
 uninstall.sh    désinstallation (garde token/logs ; --purge pour tout effacer)

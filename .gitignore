@@ -1,6 +1,5 @@
 .env
-data/*
-!data/jarvis_memoire.md
+data/
 __pycache__/
 *.log
 *.session
