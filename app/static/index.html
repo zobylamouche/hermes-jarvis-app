@@ -313,6 +313,7 @@ function toggleDiscussion() {
 }
 mic.addEventListener('pointerdown', e => {
   e.preventDefault();
+  if (curSrc || curAudio) stopSpeaking();   // toucher le micro coupe Jarvis net (demande Greg)
   pdown = Date.now();
   pttTimer = setTimeout(startRec, 250);          // appui maintenu → push-to-talk démarre
 });

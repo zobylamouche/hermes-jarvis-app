@@ -112,9 +112,67 @@ def handle_message(m):
     if "text" in m["message"]:
         brain_queue.put((chat_id, m["message"]["text"]))
     elif "voice" in m["message"] or "audio" in m["message"]:
-        reply(chat_id, "🎙️ Vocal reçu — ouvre l'app Jarvis (bouton ci-dessous) pour parler en direct, la voix arrive ici bientôt.")
+        part = m["message"].get("voice") or m["message"].get("audio")
+        threading.Thread(target=voice_worker, args=(chat_id, part["file_id"]), daemon=True).start()
     else:
         reply(chat_id, "🤖 Je traite texte et vocaux pour l'instant.")
+
+# ---------- vocaux Telegram natifs (repli si le webview Mini App ne capte rien) ----------
+def tg_download(file_id: str, dest: str):
+    fi = tg("getFile", {"file_id": file_id})
+    url = BASE.format(TOKEN, "file/" + fi["result"]["file_path"])
+    urllib.request.urlretrieve(url, dest)
+
+def tg_voice(chat_id: str, filepath: str):
+    """Envoie un .ogg en note vocale (multipart)."""
+    boundary = "----jarvis%d" % int(time.time() * 1000)
+    with open(filepath, "rb") as f:
+        audio = f.read()
+    body = (f'--{boundary}\r\nContent-Disposition: form-data; name="chat_id"\r\n\r\n{chat_id}\r\n'
+            f'--{boundary}\r\nContent-Disposition: form-data; name="voice"; filename="{os.path.basename(filepath)}"\r\n'
+            f'Content-Type: audio/ogg\r\n\r\n').encode() + audio + f"\r\n--{boundary}--\r\n".encode()
+    req = urllib.request.Request(BASE.format(TOKEN, "sendVoice"), data=body,
+                                 headers={"Content-Type": "multipart/form-data; boundary=" + boundary})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return json.load(r)
+
+def voice_worker(chat_id: str, file_id: str):
+    """Vocal Telegram → transcription → cerveau → réponse texte + note vocale Piper."""
+    import tempfile
+    sys.path.insert(0, os.path.join(HERE, "app"))
+    from server import transcribe, synthesize
+    src = None
+    try:
+        reply(chat_id, "🎙️ Je t'écoute…")
+        src = tempfile.mktemp(suffix=".ogg", dir="/tmp")
+        tg_download(file_id, src)
+        text = (transcribe(src) or "").strip()
+        if not text:
+            reply(chat_id, "Je n'ai rien entendu — renvoie ton vocal ?")
+            return
+        log.info("vocal <- %s", text[:120])
+        out = jarvis_brain.answer(text) or "Je n'ai pas de réponse — reformule ?"
+        reply(chat_id, out)
+        try:   # réponse parlée ; en cas d'échec la réponse texte reste là
+            wav = synthesize(out)
+            ogg = tempfile.mktemp(suffix=".ogg", dir="/tmp")
+            r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", "pipe:0",
+                                "-c:a", "libopus", "-b:a", "48k", ogg],
+                               input=wav, capture_output=True, timeout=60)
+            if r.returncode == 0 and os.path.getsize(ogg) > 1000:
+                tg_voice(chat_id, ogg)
+        except Exception as e:
+            log.warning("note vocale: %s", e)
+    except subprocess.TimeoutExpired:
+        reply(chat_id, "⏱️ Trop long pour cette requête. Reformule plus court ?")
+    except Exception as e:
+        log.error("vocal erreur: %s", e)
+        reply(chat_id, "🤖 Je n'ai pas pu traiter ce vocal — réessaie ?")
+    finally:
+        for p in (src,):
+            if p and os.path.exists(p):
+                try: os.unlink(p)
+                except OSError: pass
 
 def handle_callback(c):
     # plus de menu boutons : on répond juste pour faire disparaître le spinner
