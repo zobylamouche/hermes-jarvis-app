@@ -39,8 +39,16 @@ ACTION_RE = re.compile(
     r"alarme|rappelle[- ]?moi|rappel|cron|telegram|dolibarr|fxrevolution|mt5|home assistant|"
     r"verrouille|télécharge|telecharge|transcri[pt]|one ?drive|email|mail|scan)\b", re.I)
 
-_brain_lock = threading.Lock()   # sérialise hermes -z
+_brain_lock = threading.Lock()   # sérialise hermes -z (par processus ; bot et app ont chacun le leur)
 _fast_lock = threading.Lock()    # OpenRouter tolère le parallélisme, lock léger pour la propreté
+
+# Mémoire conversationnelle (par processus : la Mini App et le bot ont chacun la leur)
+from collections import deque
+_HIST = deque(maxlen=12)         # derniers échanges (role, content) injectés dans le LLM direct
+
+def _remember(role: str, content: str):
+    with _fast_lock:
+        _HIST.append((role, content))
 
 def _hermes(text: str) -> str:
     env = {**os.environ,
@@ -53,10 +61,13 @@ def _hermes(text: str) -> str:
 
 def _fast_llm(text: str) -> str:
     key = open(_OPENROUTER_KEY_FILE).read().strip()
+    messages = [{"role": "system", "content": STYLE}]
+    with _fast_lock:
+        messages += [{"role": r, "content": c} for r, c in _HIST]
+    messages.append({"role": "user", "content": text})
     body = json.dumps({
         "model": FAST_MODEL, "max_tokens": 300,
-        "messages": [{"role": "system", "content": STYLE},
-                     {"role": "user", "content": text}],
+        "messages": messages,
     }).encode()
     req = urllib.request.Request("https://openrouter.ai/api/v1/chat/completions", data=body,
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
@@ -76,15 +87,18 @@ def answer(text: str) -> str:
             return _hermes(text) or "(réponse vide)"
         except subprocess.TimeoutExpired:
             return "⏱️ Trop long pour cette requête. Reformule plus court ?"
-        except Exception as e:
-            return f"🤖 Erreur interne: {e}"
+        except Exception:
+            return "🤖 Erreur interne — réessaie, ou reformule autrement."
     try:
-        return _fast_llm(text)
+        reply = _fast_llm(text)
+        _remember("user", route_text)
+        _remember("assistant", reply)
+        return reply
     except Exception:
         pass
     try:
         return _hermes(text) or "(réponse vide)"
     except subprocess.TimeoutExpired:
         return "⏱️ Trop long pour cette requête. Reformule plus court ?"
-    except Exception as e:
-        return f"🤖 Erreur interne: {e}"
+    except Exception:
+        return "🤖 Erreur interne — réessaie, ou reformule autrement."

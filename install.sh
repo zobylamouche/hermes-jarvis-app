@@ -8,11 +8,18 @@ SRC="$(cd "$(dirname "$0")" && pwd)"
 UNIT_NAME="jarvis-bot"
 
 echo "→ Installation Jarvis Bot dans $PREFIX"
-mkdir -p "$PREFIX/data"
+mkdir -p "$PREFIX/data" "$PREFIX/models/piper"
 
-# 1. fichiers (bot.py, README) sauf .env et data (jamais écrasés)
-[ "$SRC" != "$PREFIX" ] && install -m 755 "$SRC/bot.py" "$PREFIX/bot.py"
+# 1. fichiers (bot.py, jarvis_brain.py, app/, README) sauf .env, data et venv (jamais écrasés)
+[ "$SRC" != "$PREFIX" ] && install -m 755 "$SRC/bot.py" "$PREFIX/bot.py" || true
+[ "$SRC" != "$PREFIX" ] && [ -f "$SRC/jarvis_brain.py" ] && install -m 755 "$SRC/jarvis_brain.py" "$PREFIX/jarvis_brain.py" || true
+if [ "$SRC" != "$PREFIX" ] && [ -d "$SRC/app" ]; then
+  mkdir -p "$PREFIX/app"
+  cp -r "$SRC/app/server.py" "$PREFIX/app/server.py"
+  [ -d "$SRC/app/static" ] && cp -r "$SRC/app/static/." "$PREFIX/app/static/" || true
+fi
 [ "$SRC" != "$PREFIX" ] && [ -f "$SRC/README.md" ] && install -m 644 "$SRC/README.md" "$PREFIX/README.md" || true
+[ "$SRC" != "$PREFIX" ] && [ -d "$SRC/models/piper" ] && cp -n "$SRC/models/piper/"*.onnx* "$PREFIX/models/piper/" 2>/dev/null || true
 
 # 2. .env : créé une seule fois, jamais écrasé par une réinstallation
 if [ ! -f "$PREFIX/.env" ]; then
@@ -38,7 +45,7 @@ fi
 if [ ! -x "$PREFIX/venv/bin/python3" ]; then
   echo "→ Création du venv Python + dépendances (quelques minutes)…"
   python3 -m venv "$PREFIX/venv"
-  "$PREFIX/venv/bin/pip" -q install fastapi uvicorn python-multipart faster-whisper
+  "$PREFIX/venv/bin/pip" -q install fastapi uvicorn python-multipart faster-whisper piper-tts
 else
   echo "→ venv existant conservé."
 fi

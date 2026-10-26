@@ -46,9 +46,15 @@ header .s { font-size:10px; color:#5a8a96; letter-spacing:2px; margin-top:2px; }
 .status { font-size:11px; letter-spacing:2px; color:#5a8a96; margin-bottom:8px; min-height:14px; }
 .status.listen { color:#7fff9e; text-shadow:0 0 8px #7fff9e; }
 .status.think  { color:#ffd166; text-shadow:0 0 8px #ffd166; }
-#voice { position:absolute; top:12px; right:12px; width:36px; height:36px; border-radius:50%;
+#voice { position:absolute; top:12px; right:12px; width:44px; height:44px; border-radius:50%;
   border:1px solid rgba(0,229,255,.35); background:rgba(0,229,255,.08); color:var(--cy);
-  font-size:16px; cursor:pointer; }
+  font-size:18px; cursor:pointer; }
+#voicemodel { position:absolute; top:12px; right:64px; width:44px; height:44px; border-radius:50%;
+  border:1px solid rgba(0,229,255,.35); background:rgba(0,229,255,.08); color:var(--cy);
+  font-size:17px; cursor:pointer; }
+#stopvoice { position:absolute; top:12px; left:12px; width:44px; height:44px; border-radius:50%;
+  border:1px solid #ff5470; background:rgba(255,84,112,.1); color:#ff5470;
+  font-size:16px; cursor:pointer; display:none; }
 
 /* LOG */
 #log { flex:1; overflow-y:auto; padding:6px 14px 10px; }
@@ -94,13 +100,15 @@ header .s { font-size:10px; color:#5a8a96; letter-spacing:2px; margin-top:2px; }
   </div>
   <div class="status" id="status">SYSTÈME OPÉRATIONNEL</div>
   <button id="voice" title="Voix on/off">🔊</button>
+  <button id="voicemodel" title="Changer de voix">🎚</button>
+  <button id="stopvoice" title="Stopper la voix">⏹</button>
 </header>
 <div id="log"></div>
 <div class="controls">
   <div class="microw">
     <button id="mic" title="Maintenir pour parler">🎙</button>
     <div class="inrow">
-      <input id="txt" placeholder="Parler à Jarvis…" autocomplete="off">
+      <input id="txt" placeholder="Écrire à Jarvis…" autocomplete="off">
       <button id="send">➤</button>
     </div>
   </div>
@@ -143,20 +151,45 @@ document.addEventListener('pointerdown', unlockAudio, true);   // capture : avan
 document.addEventListener('touchstart', unlockAudio, { passive: true });
 
 let curSrc = null, curAudio = null;
+const sbtn = $('stopvoice');
+function stopSpeaking() {
+  if (curSrc) { try { curSrc.stop(); } catch (e) {} curSrc = null; }
+  if (curAudio) { curAudio.pause(); curAudio = null; }
+  sbtn.style.display = 'none';
+  statusTo('SYSTÈME OPÉRATIONNEL');
+}
+sbtn.onclick = stopSpeaking;
+
+/* --- SÉLECTEUR DE VOIX (Piper local) --- */
+let VOICES = [];
+let myVoice = localStorage.getItem('jarvis_voix') || 'fr_FR-siwis-medium';   // la plus naturelle
+fetch('/api/voices', { headers: { 'X-Init-Data': INIT } })
+  .then(r => r.ok ? r.json() : null)
+  .then(j => { VOICES = (j && j.voices) || []; })
+  .catch(() => {});
+$('voicemodel').onclick = () => {
+  if (!VOICES.length) { statusTo('AUCUNE AUTRE VOIX INSTALLÉE'); return; }
+  const i = VOICES.indexOf(myVoice);
+  myVoice = VOICES[(i + 1) % VOICES.length];
+  localStorage.setItem('jarvis_voix', myVoice);
+  statusTo('VOIX : ' + myVoice.replace(/^fr_FR-/, '').replace(/-(medium|low|x_low)$/i, '').toUpperCase());
+};
+
 async function speak(text) {
   if (!voiceOn || !text) return;
   try {
-    const r = await fetch('/api/tts', { method:'POST', headers: headers(), body: JSON.stringify({ text }) });
-    if (!r.ok) return;
+    const r = await fetch('/api/tts', { method:'POST', headers: headers(), body: JSON.stringify({ text, voice: myVoice }) });
+    if (!r.ok) { statusTo('VOIX INDISPONIBLE — RÉESSAIE', 'think'); return; }
     const buf = await r.arrayBuffer();
     statusTo('JARVIS PARLE…', 'listen');
+    sbtn.style.display = 'block';
     if (actx && actx.state === 'running') {
       const audio = await actx.decodeAudioData(buf);
       if (curSrc) { try { curSrc.stop(); } catch (e) {} }
       curSrc = actx.createBufferSource();
       curSrc.buffer = audio;
       curSrc.connect(actx.destination);
-      curSrc.onended = () => statusTo('SYSTÈME OPÉRATIONNEL');
+      curSrc.onended = () => { sbtn.style.display = 'none'; statusTo('SYSTÈME OPÉRATIONNEL'); };
       curSrc.start();
     } else {
       // repli : élément Audio classique (nécessite un geste récent)
@@ -164,11 +197,12 @@ async function speak(text) {
       if (curAudio) { curAudio.pause(); }
       curAudio = new Audio(URL.createObjectURL(blob));
       await curAudio.play();
-      curAudio.onended = () => statusTo('SYSTÈME OPÉRATIONNEL');
+      curAudio.onended = () => { sbtn.style.display = 'none'; statusTo('SYSTÈME OPÉRATIONNEL'); };
     }
   } catch (e) {
     // autoplay refusé : la réponse affichée est cliquable pour l'entendre
-    statusTo('TOUCHE MA RÉPONSE POUR M\'ENTENDRE', 'think');
+    sbtn.style.display = 'none';
+    statusTo("TOUCHE MA RÉPONSE POUR M'ENTENDRE", 'think');
   }
 }
 
@@ -195,7 +229,12 @@ async function brain(text, bubble) {
     const r = await fetch('/api/chat', { method:'POST', headers: headers(), body: JSON.stringify({ text }) });
     if (r.status === 401) { addMsg('jarvis', '⚠️ Session Telegram invalide. Rouvre l\'app.'); return; }
     const j = await r.json();
-    const reply = j.reply || '…';
+    const reply = (j.reply || '').trim();
+    if (!reply) {
+      addMsg('jarvis', "🤖 Je n'ai pas de réponse — reformule ?");
+      statusTo('RÉPONSE VIDE', 'think');
+      return;
+    }
     addMsg('jarvis', reply);
     speak(reply);
   } catch (e) {
@@ -244,7 +283,12 @@ async function sendVoice(blob) {
     const r = await fetch('/api/stt', { method:'POST', headers: { 'X-Init-Data': INIT }, body: fd });
     if (r.status === 401) { addMsg('jarvis', '⚠️ Session Telegram invalide.'); return; }
     const j = await r.json();
-    const heard = j.transcription || '…';
+    const heard = (j.transcription || '').trim();
+    if (!heard) {
+      addMsg('jarvis', "🎤 Je n'ai rien saisi — réessaie en parlant plus près du micro.");
+      statusTo('RIEN ENTENDU — RÉESSAIE', 'think');
+      return;
+    }
     addMsg('me', '🎤 ' + heard);
     // 2) cerveau sur la transcription
     statusTo('TRAITEMENT…', 'think');
@@ -253,7 +297,7 @@ async function sendVoice(blob) {
   statusTo('SYSTÈME OPÉRATIONNEL');
 }
 
-addMsg('jarvis', `Bonjour ${tg.initDataUnsafe?.user?.first_name || ''} 🤖\nSystems online. Maintiens le micro pour me parler, ou écris.`);
+addMsg('jarvis', `Bonjour ${tg.initDataUnsafe?.user?.first_name || ''} 🤖\nSystèmes en ligne. Maintiens le micro pour me parler, ou écris.`);
 statusTo('SYSTÈME OPÉRATIONNEL');
 </script>
 </body>

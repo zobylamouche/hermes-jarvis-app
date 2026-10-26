@@ -119,9 +119,10 @@ def transcribe(audio_path: str) -> str:
     return text
 
 # ---------- Piper TTS (chargé au premier vocal, ensuite en RAM) ----------
-TTS_MODEL = os.environ.get("JARVIS_TTS_MODEL", "/opt/jarvis/models/piper/fr_FR-tom-medium.onnx")
+VOICES_DIR = "/opt/jarvis/models/piper"
+TTS_MODEL = os.environ.get("JARVIS_TTS_MODEL", os.path.join(VOICES_DIR, "fr_FR-tom-medium.onnx"))
 TTS_MAX_CHARS = 500
-_piper = None
+_voices = {}          # chemin modèle -> PiperVoice chargé (RAM)
 _piper_lock = threading.Lock()
 
 _EMOJI_RE = re.compile(r"[\U00010000-\U0010FFFF\u2600-\u27BF\uFE0F\u200D\u2190-\u21FF]")
@@ -142,22 +143,42 @@ def clean_for_tts(text: str) -> str:
         t = cut.strip()
     return t
 
-def synthesize(text: str) -> bytes:
+def available_voices() -> list:
+    """Noms de voix Piper disponibles (sans extension), pour la whitelist /api/voices."""
+    try:
+        return sorted(os.path.splitext(f)[0] for f in os.listdir(VOICES_DIR) if f.endswith(".onnx"))
+    except OSError:
+        return []
+
+def resolve_voice(name: str) -> str:
+    """Nom de voix demandé par le front -> chemin .onnx validé (jamais de chemin arbitraire)."""
+    if not name:
+        return TTS_MODEL
+    v = os.path.basename(name)                      # strip toute arborescence
+    if not v.endswith(".onnx"):
+        v += ".onnx"
+    path = os.path.join(VOICES_DIR, v)
+    if not os.path.isfile(path):
+        raise HTTPException(400, f"voix inconnue: {v}")
+    return path
+
+def synthesize(text: str, model_path: str | None = None) -> bytes:
     """Rend un WAV 16 bits mono, PCM, prêt à jouer dans le navigateur."""
-    global _piper
     t = clean_for_tts(text)
     if not t:
         raise HTTPException(400, "rien à dire")
+    model_path = model_path or TTS_MODEL
     with _piper_lock:
-        if _piper is None:
+        voice = _voices.get(model_path)
+        if voice is None:
             from piper import PiperVoice
-            _piper = PiperVoice.load(TTS_MODEL)
+            voice = _voices[model_path] = PiperVoice.load(model_path)
         buf = io.BytesIO()
         with wave.open(buf, "wb") as w:
             w.setnchannels(1)
             w.setsampwidth(2)
-            w.setframerate(_piper.config.sample_rate)
-            for chunk in _piper.synthesize(t):
+            w.setframerate(voice.config.sample_rate)
+            for chunk in voice.synthesize(t):
                 w.writeframes(chunk.audio_int16_bytes)
         return buf.getvalue()
 
@@ -167,12 +188,14 @@ def warmup_models():
     """Précharge Whisper et Piper en arrière-plan : le 1er vocal ne paie plus le chargement (~7 s)."""
     def _warm():
         try:
-            wav = synthesize("Systèmes en ligne.")
-            with open("/opt/jarvis/models/warmup.wav", "wb") as f:
-                f.write(wav)
+            # les 2 voix fr disponibles : le 1er changement de voix ne paie pas le chargement
+            for v in set(available_voices()) or {os.path.basename(TTS_MODEL)}:
+                wav = synthesize("Systèmes en ligne.", resolve_voice(v))
+                with open("/opt/jarvis/models/warmup.wav", "wb") as f:
+                    f.write(wav)
             transcribe("/opt/jarvis/models/warmup.wav")
-        except Exception:
-            pass
+        except Exception as e:
+            logging.getLogger("jarvis").warning("warmup incomplet: %s", e)
     threading.Thread(target=_warm, daemon=True).start()
 
 @app.get("/")
@@ -227,14 +250,20 @@ async def api_voice(request: Request, file: UploadFile, note: str = Form("")):
 
 @app.post("/api/tts")
 async def api_tts(request: Request):
-    """Texte -> audio WAV (voix Jarvis). Auth initData obligatoire."""
+    """Texte -> audio WAV (voix Jarvis). Auth initData obligatoire. voice = nom Piper optionnel."""
     validate_init_data(request.headers.get("X-Init-Data", ""))
     body = await request.json()
     text = (body.get("text") or "").strip()
     if not text:
         raise HTTPException(400, "texte vide")
-    audio = await run_in_threadpool(synthesize, text)   # laisse remonter les HTTPException
+    audio = await run_in_threadpool(synthesize, text, resolve_voice(body.get("voice") or ""))
     return Response(audio, media_type="audio/wav", headers={"Cache-Control": "no-store"})
+
+@app.get("/api/voices")
+async def api_voices(request: Request):
+    """Liste des voix Piper disponibles (auth initData obligatoire)."""
+    validate_init_data(request.headers.get("X-Init-Data", ""))
+    return JSONResponse({"voices": available_voices()})
 
 @app.get("/health")
 def health():
