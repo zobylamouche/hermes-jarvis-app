@@ -120,8 +120,15 @@ def handle_message(m):
 # ---------- vocaux Telegram natifs (repli si le webview Mini App ne capte rien) ----------
 def tg_download(file_id: str, dest: str):
     fi = tg("getFile", {"file_id": file_id})
-    url = BASE.format(TOKEN, "file/" + fi["result"]["file_path"])
-    urllib.request.urlretrieve(url, dest)
+    fp = fi["result"]["file_path"]
+    url = BASE.format(TOKEN, "file/" + fp)
+    log.info("telechargement: file_id ok, path=%s taille=%.1f Ko", fp,
+             fi["result"].get("file_size", 0) / 1024)
+    try:
+        urllib.request.urlretrieve(url, dest)
+    except Exception:
+        log.error("telechargement 404? url (token masque) = %s", url.replace(TOKEN, "<TOKEN>"))
+        raise
 
 def tg_voice(chat_id: str, filepath: str):
     """Envoie un .ogg en note vocale (multipart)."""
@@ -171,7 +178,7 @@ def voice_worker(chat_id: str, file_id: str):
     except subprocess.TimeoutExpired:
         reply(chat_id, "⏱️ Trop long pour cette requête. Reformule plus court ?")
     except Exception as e:
-        log.error("vocal erreur: %s", e)
+        log.exception("vocal erreur: %s", e)
         reply(chat_id, "🤖 Je n'ai pas pu traiter ce vocal — réessaie ?")
     finally:
         for p in (src,):
