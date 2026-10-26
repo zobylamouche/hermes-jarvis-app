@@ -1,7 +1,7 @@
 # Cerveau Jarvis : routage intention.
 # Conversation -> LLM direct (OpenRouter, ~2 s). Action/outils -> hermes -z (session agent).
 # Fallback hermes si l'appel LLM échoue. Aucune clé n'est jamais loggée.
-import os, re, json, shutil, threading, subprocess, urllib.request, urllib.error
+import os, re, sys, json, shutil, threading, subprocess, urllib.request, urllib.error
 
 ENV_FILE = "/opt/jarvis/.env"
 HERMES_DEFAULT = "/usr/local/lib/hermes-agent/.hermes/bin/hermes"
@@ -45,10 +45,40 @@ _fast_lock = threading.Lock()    # OpenRouter tolère le parallélisme, lock lé
 # Mémoire conversationnelle (par processus : la Mini App et le bot ont chacun la leur)
 from collections import deque
 _HIST = deque(maxlen=12)         # derniers échanges (role, content) injectés dans le LLM direct
+_MEMOIRE_FILE = os.environ.get("JARVIS_MEMOIRE_FILE", "/opt/jarvis/data/jarvis_memoire.md")
+
+def _load_memoire() -> str:
+    """Profil persistant de Jarvis (rechargé à chaque appel : le fichier reste petit)."""
+    try:
+        return open(_MEMOIRE_FILE, encoding="utf-8").read().strip()
+    except OSError:
+        return ""
 
 def _remember(role: str, content: str):
     with _fast_lock:
         _HIST.append((role, content))
+    _save_hist()
+
+def _hist_file() -> str:
+    tag = "app" if "server" in (sys.argv[0] or "") else "bot"
+    return f"/opt/jarvis/data/jarvis_hist_{tag}.json"
+
+def _save_hist():
+    try:
+        with _fast_lock:
+            json.dump(list(_HIST), open(_hist_file(), "w"))
+    except OSError:
+        pass
+
+def _load_hist():
+    try:
+        with _fast_lock:
+            for r, c in json.load(open(_hist_file())):
+                _HIST.append((r, c))
+    except (OSError, ValueError):
+        pass
+
+_load_hist()
 
 def _hermes(text: str) -> str:
     env = {**os.environ,
@@ -62,6 +92,9 @@ def _hermes(text: str) -> str:
 def _fast_llm(text: str) -> str:
     key = open(_OPENROUTER_KEY_FILE).read().strip()
     messages = [{"role": "system", "content": STYLE}]
+    memoire = _load_memoire()
+    if memoire:
+        messages.append({"role": "system", "content": "Ta mémoire (ce que tu sais de Greg et de ton monde) :\n" + memoire})
     with _fast_lock:
         messages += [{"role": r, "content": c} for r, c in _HIST]
     messages.append({"role": "user", "content": text})
