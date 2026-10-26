@@ -121,7 +121,8 @@ def _to_wav(src: str) -> str:
     except Exception:
         raise RuntimeError("audio illisible")
     if r.returncode != 0 or not os.path.exists(dst):
-        raise RuntimeError("audio illisible")
+        err = (r.stderr or b"").decode(errors="replace")[-300:]
+        raise RuntimeError("ffmpeg %s: %s" % (r.returncode, err or "sans message"))
     return dst
 
 def transcribe(audio_path: str) -> str:
@@ -255,8 +256,14 @@ async def api_stt(request: Request, file: UploadFile):
         text = await run_in_threadpool(transcribe, audio_path)
     except HTTPException:
         raise
-    except Exception:
-        logging.getLogger("jarvis").warning("audio illisible (%s octets)", len(blob))
+    except Exception as exc:
+        try:   # capture du blob illisible pour diagnostic
+            os.makedirs("/opt/jarvis/bad_audio", exist_ok=True)
+            with open("/opt/jarvis/bad_audio/%d.webm" % int(time.time()), "wb") as f:
+                f.write(blob)
+        except OSError:
+            pass
+        logging.getLogger("jarvis").warning("audio illisible (%s octets): %s", len(blob), str(exc)[:200])
         raise HTTPException(400, "vocal illisible")
     finally:
         os.unlink(audio_path)
