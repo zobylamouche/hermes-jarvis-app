@@ -139,8 +139,13 @@ def tg_voice(chat_id: str, filepath: str):
 def voice_worker(chat_id: str, file_id: str):
     """Vocal Telegram → transcription → cerveau → réponse texte + note vocale Piper."""
     import tempfile
-    sys.path.insert(0, os.path.join(HERE, "app"))
-    from server import transcribe, synthesize
+    try:
+        sys.path.insert(0, os.path.join(HERE, "app"))
+        from server import transcribe, synthesize   # venv requis (fastapi importé par server.py)
+    except Exception as e:
+        log.error("import serveur impossible: %s", e)
+        reply(chat_id, "🤖 La voix n'est pas branchée côté serveur — redemarre-moi ?")
+        return
     src = None
     try:
         reply(chat_id, "🎙️ Je t'écoute…")
