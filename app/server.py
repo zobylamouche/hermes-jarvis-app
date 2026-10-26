@@ -200,7 +200,8 @@ def warmup_models():
 
 @app.get("/")
 def index():
-    return FileResponse(os.path.join(STATIC, "index.html"))
+    return FileResponse(os.path.join(STATIC, "index.html"),
+                        headers={"Cache-Control": "no-store, must-revalidate"})
 
 @app.post("/api/chat")
 async def api_chat(request: Request):
