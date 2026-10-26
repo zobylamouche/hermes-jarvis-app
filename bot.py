@@ -4,7 +4,7 @@
 Portable : toute la config passe par .env (token, chats autorisés, chemin hermes).
 Voir README.md — installation sur n'importe quelle instance Hermes via install.sh.
 """
-import os, json, time, subprocess, threading, queue, sys, logging, shutil
+import os, json, time, subprocess, threading, queue, sys, logging, shutil, glob
 import urllib.request, urllib.error
 
 BASE = "https://api.telegram.org/bot{}/{}"
@@ -44,13 +44,32 @@ HERMES_BIN = ENV.get("HERMES_BIN") or shutil.which("hermes") \
 HERMES_BIN = os.path.expanduser(HERMES_BIN)
 log.info("cerebra binaire: %s | chats autorisés: %s", HERMES_BIN, sorted(ALLOWED))
 
+# Serveur Bot API LOCAL (mtproto) : l'endpoint cloud /file/ répond 404 depuis ce VPS
+# (constat 2026-10-27 : upload OK mais téléchargement systématiquement 404, tous types
+# de fichiers, deux bots, IPv4/IPv6). Le serveur local télécharge via MTProto et pose
+# les fichiers sur disque ; repli cloud automatique s'il est mort.
+TG_LOCAL = os.environ.get("JARVIS_TGBOTAPI")            # ex: http://127.0.0.1:8081
+TG_LOCAL_DIR = os.environ.get("JARVIS_TGBOTAPI_DIR", "")  # ex: /opt/jarvis/tgbotapi-data
+
+def _bases():
+    return ([TG_LOCAL] if TG_LOCAL else []) + [BASE]
+
 def tg(method, payload=None, timeout=35):
-    req = urllib.request.Request(
-        BASE.format(TOKEN, method),
-        data=json.dumps(payload).encode() if payload else None,
-        headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.load(r)
+    data = json.dumps(payload).encode() if payload else None
+    last = None
+    for base in _bases():
+        try:
+            req = urllib.request.Request(
+                base.format(TOKEN, method),
+                data=data,
+                headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.load(r)
+        except Exception as e:
+            last = e
+            if base == TG_LOCAL:
+                log.warning("serveur TG local KO (%s) → repli cloud", e)
+    raise last
 
 def reply(chat_id, text, keyboard=None, parse="Markdown"):
     payload = {"chat_id": chat_id, "text": text[:4000]}
@@ -121,9 +140,17 @@ def handle_message(m):
 def tg_download(file_id: str, dest: str):
     fi = tg("getFile", {"file_id": file_id})
     fp = fi["result"]["file_path"]
-    url = BASE.format(TOKEN, "file/" + fp)
     log.info("telechargement: file_id ok, path=%s taille=%.1f Ko", fp,
              fi["result"].get("file_size", 0) / 1024)
+    # serveur local : fichier déjà posé sur disque par mtproto
+    if TG_LOCAL_DIR and not fp.startswith("/"):
+        m = glob.glob(os.path.join(TG_LOCAL_DIR, "*", fp))
+        if m:
+            shutil.copyfile(m[0], dest)
+            log.info("fichier lu depuis le serveur TG local: %s", m[0])
+            return
+        log.warning("fichier absent du volume local (%s), repli HTTP", TG_LOCAL_DIR)
+    url = BASE.format(TOKEN, "file/" + fp)
     try:
         urllib.request.urlretrieve(url, dest)
     except Exception:
@@ -131,17 +158,25 @@ def tg_download(file_id: str, dest: str):
         raise
 
 def tg_voice(chat_id: str, filepath: str):
-    """Envoie un .ogg en note vocale (multipart)."""
+    """Envoie un .ogg en note vocale (multipart), serveur local d'abord puis cloud."""
     boundary = "----jarvis%d" % int(time.time() * 1000)
     with open(filepath, "rb") as f:
         audio = f.read()
     body = (f'--{boundary}\r\nContent-Disposition: form-data; name="chat_id"\r\n\r\n{chat_id}\r\n'
             f'--{boundary}\r\nContent-Disposition: form-data; name="voice"; filename="{os.path.basename(filepath)}"\r\n'
             f'Content-Type: audio/ogg\r\n\r\n').encode() + audio + f"\r\n--{boundary}--\r\n".encode()
-    req = urllib.request.Request(BASE.format(TOKEN, "sendVoice"), data=body,
-                                 headers={"Content-Type": "multipart/form-data; boundary=" + boundary})
-    with urllib.request.urlopen(req, timeout=60) as r:
-        return json.load(r)
+    last = None
+    for base in _bases():
+        try:
+            req = urllib.request.Request(base.format(TOKEN, "sendVoice"), data=body,
+                                         headers={"Content-Type": "multipart/form-data; boundary=" + boundary})
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return json.load(r)
+        except Exception as e:
+            last = e
+            if base == TG_LOCAL:
+                log.warning("note vocale: serveur local KO (%s) → repli cloud", e)
+    raise last
 
 def voice_worker(chat_id: str, file_id: str):
     """Vocal Telegram → transcription → cerveau → réponse texte + note vocale Piper."""
