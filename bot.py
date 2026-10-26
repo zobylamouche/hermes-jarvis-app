@@ -87,32 +87,8 @@ def brain_worker():
 
 threading.Thread(target=brain_worker, daemon=True).start()
 
-# ---------- actions des boutons ----------
-def action_maison(chat_id):
-    brain_queue.put((chat_id, "Donne-moi un état rapide de la maison (capteurs principaux, alarme, température). Réponds court."))
-
-def action_trading(chat_id):
-    brain_queue.put((chat_id, "Résumé trading : donne l'état des comptes FxRevolution (derniers signaux, succès/échecs) et la situation Alpaca paper. Court et clair."))
-
-def action_briefing(chat_id):
-    # dernier rapport de cron disponible (aujourd'hui sinon plus récent)
-    import glob
-    files = sorted(glob.glob("/root/.hermes/cron/output/*/*.md"), key=os.path.getmtime, reverse=True)
-    if not files:
-        reply(chat_id, "Aucun rapport disponible."); return
-    f = files[0]
-    import datetime
-    age = time.time() - os.path.getmtime(f)
-    head = open(f, errors="replace").read()[:1800]
-    reply(chat_id, f"📄 *{os.path.basename(f)}* — {int(age//3600)} h\n\n{head}")
-
-MENU = [[("🏠 Maison", "maison"), ("📊 Trading", "trading")],
-        [("📄 Briefing", "briefing"), ("🎙️ Vocal", "vocal")]]
-
+# ---------- clavier Mini App ----------
 APP_URL = ENV.get("JARVIS_APP_URL", "https://jarvis.spectrodom.xyz")
-
-def kb(menu=MENU):
-    return [[{"text": t, "callback_data": c} for t, c in row] for row in menu]
 
 def reply_kb():
     """Clavier persistant : lance la Mini App Jarvis (HUD plein écran)."""
@@ -121,9 +97,9 @@ def reply_kb():
 
 WELCOME = (
     "🤖 *Jarvis en ligne*\n"
-    "Ton assistant personnel — les boutons pour l'action rapide, "
-    "écris-moi librement pour tout le reste (je traite avec les mêmes outils "
-    "que sur le chat principal)."
+    "À ton service. Écris-moi librement — je traite avec les mêmes outils "
+    "que sur le chat principal.\n"
+    "Ou ouvre l'app ci-dessous : HUD, voix inclus."
 )
 
 def allowed(chat_id):
@@ -134,32 +110,19 @@ def handle_message(m):
     if not allowed(chat_id):
         log.warning("chat refusé: %s", chat_id); return
     if "text" in m["message"] and m["message"]["text"].startswith("/start"):
-        payload = {"chat_id": chat_id, "text": WELCOME,
-                   "reply_markup": {"inline_keyboard": kb()}}
+        payload = {"chat_id": chat_id, "text": WELCOME, "reply_markup": reply_kb()}
         tg("sendMessage", payload)
-        tg("sendMessage", {"chat_id": chat_id,
-                           "text": "👇 Bouton permanent ci-dessous pour ouvrir l'app Jarvis.",
-                           "reply_markup": reply_kb()})
         return
     if "text" in m["message"]:
         brain_queue.put((chat_id, m["message"]["text"]))
     elif "voice" in m["message"] or "audio" in m["message"]:
-        reply(chat_id, "🎙️ Vocal reçu — transcription en préparation (Phase 2). Pour l'instant, écris-moi 🙂")
+        reply(chat_id, "🎙️ Vocal reçu — ouvre l'app Jarvis (bouton ci-dessous) pour parler en direct, la voix arrive ici bientôt.")
     else:
         reply(chat_id, "🤖 Je traite texte et vocaux pour l'instant.")
 
 def handle_callback(c):
-    chat_id = str(c["message"]["chat"]["id"])
-    if not allowed(chat_id): return
-    data = c["data"]
+    # plus de menu boutons : on répond juste pour faire disparaître le spinner
     tg("answerCallbackQuery", {"callback_query_id": c["id"]})
-    if data == "maison":   action_maison(chat_id)
-    elif data == "trading": action_trading(chat_id)
-    elif data == "briefing": action_briefing(chat_id)
-    elif data == "vocal":
-        reply(chat_id, "🎙️ Envoie-moi un vocal ! La transcription+réponse vocale arrive en Phase 2.")
-    else:
-        reply(chat_id, "Action inconnue.")
 
 def main():
     log.info("Jarvis Bot démarré (polling)")

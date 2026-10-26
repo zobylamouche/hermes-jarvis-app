@@ -1,6 +1,6 @@
 # Jarvis Bot 🤖
 
-Ton assistant Hermes dans Telegram, comme une app : **DM permanent, boutons, vocaux, notifications** — mais légitime, local-first, sans abonnement. Le bot est une fenêtre vers **le cerveau Hermes de ta machine** (mêmes outils, même mémoire).
+Ton assistant Hermes dans Telegram, comme une app : **DM permanent, conversation libre, Mini App HUD, vocaux** — mais légitime, local-first, sans abonnement. Le bot est une fenêtre vers **le cerveau Hermes de ta machine** (mêmes outils, même mémoire).
 
 Fonctionne sur **n'importe quelle instance Hermes** (VPS, machine locale, serveur domestique).
 
@@ -18,7 +18,7 @@ Puis :
 3. Dans `.env`, mets ton chat id dans `ALLOWED_CHAT_IDS` (par défaut : celui du canal Home d'un Hermes existant ; pour un nouveau compte, écris d'abord un message à ton bot puis récupère l'id via l'update API)
 4. `systemctl enable --now jarvis-bot jarvis-app`
 5. **Mini App** : sous-domaine → `A jarvis.votredomaine.tld VOTRE_IP` + site nginx (proxy → 127.0.0.1:8010) + `certbot --nginx` ; mets `JARVIS_APP_URL=https://jarvis.votredomaine.tld` dans `.env`
-6. Envoie `/start` à ton bot → menu + bouton permanent **🤖 OUVRIR JARVIS**
+6. Envoie `/start` à ton bot → conversation libre + bouton permanent **🤖 OUVRIR JARVIS**
 
 ## La Mini App (HUD façon Iron Man)
 
@@ -32,21 +32,19 @@ Le bouton **🤖 OUVRIR JARVIS** lance la Mini App Telegram en plein écran :
 
 ## Ce que le bot fait
 
-- 🏠 **Maison** — état des capteurs (via Home Assistant du serveur)
-- 📊 **Trading** — résumé des comptes FxRevolution / Alpaca paper (si présent)
-- 📄 **Briefing** — le dernier rapport de cron Hermes
-- 💬 **Texte libre** — traité par le cerveau complet (`hermes -z`) : tout ce que ton Hermes sait faire
+- 💬 **Conversation libre** — traité par le cerveau complet (`hermes -z`) : tout ce que ton Hermes sait faire
+- 🤖 **Mini App HUD** — s'ouvre en plein écran via le bouton permanent (voix incluse)
+- Pas de menus, pas de boutons à décision prédéfinie : Jarvis, c'est Jarvis
 
 ### À venir
 - **Phase 2 — voix** : vocaux entrants → Whisper (STT), réponses → Kokoro (TTS), 100 % local
-- **Phase 3** : Mini App Telegram (dashboard PWA), mémoire Obsidian, boutons riches
 
 ## Architecture
 
 ```
 Telegram (ton bot) ← long polling ← bot.py (systemd jarvis-bot)
-                                  ├─ boutons   → prompts bornés (économie de tokens)
-                                  └─ texte libre → hermes -z (cerveau complet)
+                                  ├─ texte libre → hermes -z (cerveau complet)
+                                  └─ /start → clavier permanent "OUVRIR JARVIS" → Mini App HUD
 ```
 
 - **Long polling** : pas de webhook, pas de TLS à gérer, pas de port à ouvrir
