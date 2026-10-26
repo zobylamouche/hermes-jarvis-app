@@ -198,7 +198,7 @@ def warmup_models():
             logging.getLogger("jarvis").warning("warmup incomplet: %s", e)
     threading.Thread(target=_warm, daemon=True).start()
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 def index():
     return FileResponse(os.path.join(STATIC, "index.html"),
                         headers={"Cache-Control": "no-store, must-revalidate"})
