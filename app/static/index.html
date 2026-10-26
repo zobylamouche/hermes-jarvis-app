@@ -80,6 +80,9 @@ header .s { font-size:10px; color:#5a8a96; letter-spacing:2px; margin-top:2px; }
   display:flex; align-items:center; justify-content:center;
 }
 #mic.rec { border-color:#ff5470; color:#ff5470; box-shadow:0 0 20px rgba(255,84,112,.5); animation:pulse 1.2s infinite; }
+#retryMic { width:100%; margin-bottom:8px; padding:10px; border-radius:10px; cursor:pointer;
+  border:1px solid rgba(255,84,112,.5); background:rgba(255,84,112,.08); color:#ff5470;
+  font-size:13px; letter-spacing:1px; font-family:inherit; }
 .inrow { flex:1; display:flex; gap:8px; }
 #txt { flex:1; background:rgba(0,229,255,.05); border:1px solid rgba(0,229,255,.25); border-radius:22px;
   padding:12px 16px; color:#e8fbff; font-size:15px; outline:none; }
@@ -105,6 +108,7 @@ header .s { font-size:10px; color:#5a8a96; letter-spacing:2px; margin-top:2px; }
 </header>
 <div id="log"></div>
 <div class="controls">
+  <button id="retryMic" style="display:none">🔓 RELANCER LE MICRO</button>
   <div class="microw">
     <button id="mic" title="Maintenir pour parler">🎙</button>
     <div class="inrow">
@@ -307,6 +311,8 @@ async function sendVoice(blob) {
    détectée → enregistrement ; silence de 2 s → envoi, réponse, puis
    réécoute en boucle : Jarvis écoute et répond en continu. */
 const reactorEl = $('reactor'), coreEl = reactorEl.querySelector('.core');
+const retryMic = $('retryMic');
+retryMic.onclick = () => contStart();
 let contOn = false, contStream = null, contAnalyser = null, contRAF = 0;
 let contRec = null, contChunks = [], contState = 'listening';   // listening | busy
 let noiseFloor = 0.006, speechStart = 0, lastVoice = 0, eyeLvl = 0;
@@ -318,10 +324,25 @@ document.addEventListener('pointerdown', () => { if (!contOn) contStart(); });
 
 async function contStart() {
   unlockAudio();
+  retryMic.style.display = 'none';
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    statusTo('MICRO INDISPONIBLE ICI — OUVRE JARVIS VIA TELEGRAM WEB (CHROME)', 'think');
+    retryMic.style.display = 'block';
+    return;
+  }
   try {
     contStream = await navigator.mediaDevices.getUserMedia(
       { audio: { echoCancellation: true, noiseSuppression: true } });
-  } catch (e) { statusTo("MICRO REFUSÉ — AUTORISE L'ACCÈS", 'think'); return; }
+  } catch (e) {
+    const n = e && e.name || '';
+    if (n === 'NotAllowedError' || n === 'SecurityError')
+      statusTo('MICRO REFUSÉ — AUTORISE TELEGRAM (ET WINDOWS) PUIS RELANCE', 'think');
+    else if (n === 'NotFoundError' || n === 'DevicesNotFoundError')
+      statusTo('AUCUN MICRO DÉTECTÉ SUR CET APPAREIL', 'think');
+    else statusTo('MICRO BLOQUÉ (' + n + ') — RELANCE OU CHANGE DE NAVIGATEUR', 'think');
+    retryMic.style.display = 'block';
+    return;
+  }
   if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
   if (actx.state === 'suspended') { try { await actx.resume(); } catch (e) {} }
   const src = actx.createMediaStreamSource(contStream);
