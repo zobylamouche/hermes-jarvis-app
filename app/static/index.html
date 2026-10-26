@@ -86,9 +86,6 @@ header .s { font-size:10px; color:#5a8a96; letter-spacing:2px; margin-top:2px; }
 #txt:focus { border-color:var(--cy); box-shadow:0 0 10px rgba(0,229,255,.15); }
 #send { width:44px; height:44px; border-radius:50%; border:1px solid rgba(0,229,255,.4);
   background:rgba(0,229,255,.1); color:var(--cy); font-size:18px; cursor:pointer; flex:none; }
-#cont { width:44px; height:44px; border-radius:50%; border:1px solid rgba(0,229,255,.4);
-  background:rgba(0,229,255,.1); color:var(--cy); font-size:18px; cursor:pointer; flex:none; }
-#cont.rec { border-color:#ff5470; color:#ff5470; box-shadow:0 0 16px rgba(255,84,112,.45); }
 ::-webkit-scrollbar { width:4px; } ::-webkit-scrollbar-thumb { background:var(--dim); border-radius:2px; }
 </style>
 </head>
@@ -109,7 +106,6 @@ header .s { font-size:10px; color:#5a8a96; letter-spacing:2px; margin-top:2px; }
 <div id="log"></div>
 <div class="controls">
   <div class="microw">
-    <button id="cont" title="Mode continu : écoute puis réponse après 2 s de silence">🎧</button>
     <button id="mic" title="Maintenir pour parler">🎙</button>
     <div class="inrow">
       <input id="txt" placeholder="Écrire à Jarvis…" autocomplete="off">
@@ -304,18 +300,21 @@ async function sendVoice(blob) {
   statusTo('SYSTÈME OPÉRATIONNEL');
 }
 
-/* --- MODE CONTINU : l'œil de Jarvis suit la voix + écoute auto ---
-   Le réacteur EST le vumètre : niveau RMS du micro → échelle + éclat de
-   l'œil (montée rapide à la parole, retombée lente au silence). Si l'œil
-   s'anime quand tu parles, le téléphone capte ta voix. Parole détectée →
-   enregistrement ; silence de 2 s → envoi, réponse, puis réécoute en boucle. */
-const contBtn = $('cont'), reactorEl = $('reactor');
+/* --- ŒIL DE JARVIS + ÉCOUTE PERMANENTE ---
+   Le réacteur EST le vumètre : niveau RMS du micro → échelle + éclat du
+   centre de l'œil (montée rapide à la parole, retombée lente au silence).
+   L'œil s'anime en permanence dès que le micro est accordé. Parole
+   détectée → enregistrement ; silence de 2 s → envoi, réponse, puis
+   réécoute en boucle : Jarvis écoute et répond en continu. */
+const reactorEl = $('reactor'), coreEl = reactorEl.querySelector('.core');
 let contOn = false, contStream = null, contAnalyser = null, contRAF = 0;
 let contRec = null, contChunks = [], contState = 'listening';   // listening | busy
 let noiseFloor = 0.006, speechStart = 0, lastVoice = 0, eyeLvl = 0;
 const TD = new Uint8Array(512);
 
-contBtn.onclick = () => contOn ? contStopAll() : contStart();
+/* démarrage immédiat ; si le micro n'est pas encore accordé, premier toucher = relance */
+contStart();
+document.addEventListener('pointerdown', () => { if (!contOn) contStart(); });
 
 async function contStart() {
   unlockAudio();
@@ -328,9 +327,9 @@ async function contStart() {
   const src = actx.createMediaStreamSource(contStream);
   contAnalyser = actx.createAnalyser(); contAnalyser.fftSize = 512;
   src.connect(contAnalyser);
-  contOn = true; contBtn.classList.add('rec');
+  contOn = true;
   contState = 'listening'; lastVoice = Date.now(); noiseFloor = 0.006; speechStart = 0; eyeLvl = 0;
-  statusTo('MICRO DÉTECTÉ — PARLE, JE RÉPONDS APRÈS 2 S DE SILENCE', 'listen');
+  statusTo('MICRO ACTIF — PARLE, JE RÉPONDS APRÈS 2 S DE SILENCE', 'listen');
   loopVU();
 }
 
@@ -339,8 +338,8 @@ function contStopAll() {
   contRec = null;
   if (contStream) { contStream.getTracks().forEach(t => t.stop()); contStream = null; }
   cancelAnimationFrame(contRAF); contRAF = 0;
-  contOn = false; speechStart = 0; eyeLvl = 0; mic.classList.remove('rec'); contBtn.classList.remove('rec');
-  reactorEl.style.transform = ''; reactorEl.style.filter = '';
+  contOn = false; speechStart = 0; eyeLvl = 0; mic.classList.remove('rec');
+  coreEl.style.transform = ''; coreEl.style.filter = ''; reactorEl.style.filter = '';
   contState = 'listening';
   if (!curSrc && !curAudio) statusTo('SYSTÈME OPÉRATIONNEL');
 }
@@ -361,8 +360,9 @@ function loopVU() {
   /* l'œil EST le vumètre : échelle + éclat suivent le niveau vocal */
   const target = Math.min(1, rms / .12);
   eyeLvl += (target - eyeLvl) * (target > eyeLvl ? .45 : .08); // montée rapide, retombée lente
-  reactorEl.style.transform = `scale(${(1 + eyeLvl * .22).toFixed(3)})`;
-  reactorEl.style.filter = `brightness(${(1 + eyeLvl * 1.6).toFixed(2)}) saturate(${(1 + eyeLvl * .8).toFixed(2)})`;
+  coreEl.style.transform = `scale(${(1 + eyeLvl * .38).toFixed(3)})`;          // le noyau suit la voix
+  coreEl.style.filter = `brightness(${(1 + eyeLvl * 1.8).toFixed(2)})`;
+  reactorEl.style.filter = `brightness(${(1 + eyeLvl * .6).toFixed(2)})`;
   if (contState !== 'listening') return;     // pas de détection pendant que Jarvis parle/travaille
   if (rms > thr) {
     if (!speechStart) {                      // début de parole → on enregistre
@@ -413,7 +413,7 @@ function contResume() {
   if (!/^TOUCHE MA RÉPONSE/.test(status.textContent)) statusTo('MICRO ACTIF — JE RÉÉCOUTE', 'listen');
 }
 
-addMsg('jarvis', `Bonjour ${tg.initDataUnsafe?.user?.first_name || ''} 🤖\nSystèmes en ligne. Maintiens le micro pour me parler, active 🎧 pour la conversation en continu, ou écris.`);
+addMsg('jarvis', `Bonjour ${tg.initDataUnsafe?.user?.first_name || ''} 🤖\nSystèmes en ligne. Je t'écoute en continu — parle, je réponds après 2 s de silence. Ou écris.`);
 statusTo('SYSTÈME OPÉRATIONNEL');
 </script>
 </body>
