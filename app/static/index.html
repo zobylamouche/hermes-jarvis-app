@@ -272,13 +272,37 @@ async function startRec() {
       sendVoice(blob);
     };
     mediaRec.start(); recStart = Date.now(); recOn = true;
-    mic.classList.add('rec'); statusTo('🎤 JARVIS ÉCOUTE… (rappui = envoyer)', 'listen');
+    mic.classList.add('rec'); statusTo('🎤 PARLE — RELÂCHE POUR ENVOYER', 'listen');
+    /* aborte toute capture VAD en cours : le push-to-talk prend la main */
+    if (speechStart) { speechStart = 0; if (contRec) { const r0 = contRec; contRec = null; try { r0.stop(); } catch (e) {} } contVoiced = 0; }
   } catch (e) { statusTo('MICRO REFUSÉ — AUTORISE L\'ACCÈS'); }
 }
 function stopRec() {
   if (mediaRec && mediaRec.state === 'recording') { mediaRec.stop(); mic.classList.remove('rec'); }
 }
-mic.addEventListener('click', e => { e.preventDefault(); recOn ? stopRec() : startRec(); });
+/* Gestes micro (choix Greg) : APPUI MAINTENU = parle-relâche (push-to-talk) · DOUBLE-TAP = discussion continue on/off */
+let pttTimer = null, pdown = 0, lastTap = 0;
+function toggleDiscussion() {
+  if (contOn) { contStopAll(); statusTo('DISCUSSION CONTINUE OFF — DOUBLE-TAP MICRO POUR REVENIR', 'listen'); }
+  else { contStart(); }
+}
+mic.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  pdown = Date.now();
+  pttTimer = setTimeout(startRec, 250);          // appui maintenu → push-to-talk démarre
+});
+mic.addEventListener('pointerup', e => {
+  e.preventDefault();
+  if (pttTimer) { clearTimeout(pttTimer); pttTimer = null; }
+  if (Date.now() - pdown >= 250) { if (recOn) stopRec(); return; }   // relâche = envoyer
+  const now = Date.now();
+  if (now - lastTap < 320) { lastTap = 0; toggleDiscussion(); }       // double-tap
+  else lastTap = now;
+});
+mic.addEventListener('pointercancel', () => {
+  if (pttTimer) { clearTimeout(pttTimer); pttTimer = null; }
+  if (recOn) stopRec();
+});
 
 async function sendVoice(blob) {
   statusTo('TRANSCRIPTION…', 'think');
@@ -319,7 +343,10 @@ const TD = new Uint8Array(512);
 
 /* démarrage immédiat ; si le micro n'est pas encore accordé, premier toucher = relance */
 contStart();
-document.addEventListener('pointerdown', () => { if (!contOn) contStart(); });
+document.addEventListener('pointerdown', e => {
+  if (e.target === mic || (mic.contains && mic.contains(e.target))) return;   // le bouton micro a ses propres gestes
+  if (!contOn) contStart();
+});
 
 async function contStart() {
   unlockAudio();
@@ -383,7 +410,7 @@ function loopVU() {
   coreEl.style.transform = `scale(${(1 + eyeLvl * .38).toFixed(3)})`;          // le noyau suit la voix
   coreEl.style.filter = `brightness(${(1 + eyeLvl * 1.8).toFixed(2)})`;
   reactorEl.style.filter = `brightness(${(1 + eyeLvl * .6).toFixed(2)})`;
-  if (contState !== 'listening') return;     // pas de détection pendant que Jarvis parle/travaille
+  if (contState !== 'listening' || recOn) return;   // pas de détection pendant que Jarvis parle/travaille ou pendant un push-to-talk
   const thrStart = Math.max(.045, noiseFloor * 4);   // démarrage : voix franche, pas le bruit ambiant
   if (rms > thrStart) {
     if (!speechStart) {                      // début de parole
