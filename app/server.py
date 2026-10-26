@@ -72,9 +72,13 @@ def validate_init_data(init_data: str) -> dict:
         raise HTTPException(401, f"Auth Telegram refusée: {e}")
 
 # ---------- cerveau (queue sérialisée) ----------
+STYLE = ("Tu es Jarvis, l'assistant de Greg. Style conversationnel type ChatGPT : réponds en français, "
+         "naturel et très concis — 2 à 4 phrases courtes, pas de titres, pas de gras, pas de listes, "
+         "pas de topo ni de tableaux, sauf si Greg demande explicitement une analyse détaillée.\n\n")
+
 def brain(text: str) -> str:
     try:
-        r = subprocess.run([HERMES_BIN, "-z", text], capture_output=True, text=True,
+        r = subprocess.run([HERMES_BIN, "-z", STYLE + text], capture_output=True, text=True,
                            timeout=TIMEOUT_BRAIN,
                            env={**os.environ,
                                 "PATH": "/usr/local/lib/hermes-agent/.hermes/bin:/usr/local/bin:/usr/bin:/bin",

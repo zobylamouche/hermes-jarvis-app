@@ -62,6 +62,9 @@ def reply(chat_id, text, keyboard=None, parse="Markdown"):
         log.error("sendMessage erreur: %s", e)
 
 # ---------- cerveau (sérialisé : un appel hermes à la fois) ----------
+STYLE = ("Tu es Jarvis, l'assistant de Greg. Style conversationnel type ChatGPT : réponds en français, "
+         "naturel et très concis — 2 à 4 phrases courtes, pas de titres, pas de gras, pas de listes, "
+         "pas de topo ni de tableaux, sauf si Greg demande explicitement une analyse détaillée.\n\n")
 brain_queue = queue.Queue()
 
 def brain_worker():
@@ -69,7 +72,7 @@ def brain_worker():
         chat_id, text = brain_queue.get()
         try:
             log.info("cerebra <- %s", text[:120])
-            r = subprocess.run([HERMES_BIN, "-z", text],
+            r = subprocess.run([HERMES_BIN, "-z", STYLE + text],
                                capture_output=True, text=True, timeout=TIMEOUT_BRAIN,
                                env={**os.environ, "PATH": "/usr/local/lib/hermes-agent/.hermes/bin:/usr/local/bin:/usr/bin:/bin",
                                     "HOME": os.path.expanduser("~")})
