@@ -108,13 +108,39 @@ def _run_whisper(model, audio_path: str):
     avg = sum(probs) / len(probs) if probs else -10.0
     return text, avg
 
+def _to_wav(src: str) -> str:
+    """Normalise n'importe quel format (webm/ogg/mp4) en wav 16k mono.
+    Répare aussi les blobs MediaRecorder aux métadonnées tronquées,
+    qui font planter le décodage direct (av InvalidDataError)."""
+    import subprocess
+    dst = src.rsplit(".", 1)[0] + ".wav"
+    try:
+        r = subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                            "-i", src, "-ar", "16000", "-ac", "1", dst],
+                           capture_output=True, timeout=60)
+    except Exception:
+        raise RuntimeError("audio illisible")
+    if r.returncode != 0 or not os.path.exists(dst):
+        raise RuntimeError("audio illisible")
+    return dst
+
 def transcribe(audio_path: str) -> str:
     """Transcription rapide : tiny partout (CPU du VPS : small = 26 s, inutilisable).
     small ne sert qu'au cas limite où tiny renvoie du vide."""
     t0 = time.time()
-    text, _ = _run_whisper(_whisper_model("tiny"), audio_path)
-    if not text:
-        text, _ = _run_whisper(_whisper_model("small"), audio_path)
+    wav = audio_path
+    try:
+        wav = _to_wav(audio_path)
+    except Exception:
+        pass                                  # repli : décodage direct par faster-whisper
+    try:
+        text, _ = _run_whisper(_whisper_model("tiny"), wav)
+        if not text:
+            text, _ = _run_whisper(_whisper_model("small"), wav)
+    finally:
+        if wav != audio_path:
+            try: os.unlink(wav)
+            except OSError: pass
     logging.getLogger("jarvis").info("transcription %.1fs: %s", time.time() - t0, text[:80])
     return text
 
@@ -220,10 +246,18 @@ async def api_stt(request: Request, file: UploadFile):
     validate_init_data(request.headers.get("X-Init-Data", ""))
     suffix = os.path.splitext(file.filename or "v.webm")[1] or ".webm"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir="/tmp") as tmp:
-        tmp.write(await file.read())
+        blob = await file.read()
+        if len(blob) < 2048:
+            raise HTTPException(400, "vocal trop court")
+        tmp.write(blob)
         audio_path = tmp.name
     try:
         text = await run_in_threadpool(transcribe, audio_path)
+    except HTTPException:
+        raise
+    except Exception:
+        logging.getLogger("jarvis").warning("audio illisible (%s octets)", len(blob))
+        raise HTTPException(400, "vocal illisible")
     finally:
         os.unlink(audio_path)
     if not text:
@@ -235,10 +269,17 @@ async def api_voice(request: Request, file: UploadFile, note: str = Form("")):
     user = validate_init_data(request.headers.get("X-Init-Data", ""))
     suffix = os.path.splitext(file.filename or "v.webm")[1] or ".webm"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir="/tmp") as tmp:
-        tmp.write(await file.read())
+        blob = await file.read()
+        if len(blob) < 2048:
+            raise HTTPException(400, "vocal trop court")
+        tmp.write(blob)
         audio_path = tmp.name
     try:
-        text = await run_in_threadpool(transcribe, audio_path)  # noqa: garde /api/voice (1 appel cerveau)
+        try:
+            text = await run_in_threadpool(transcribe, audio_path)  # noqa: garde /api/voice (1 appel cerveau)
+        except Exception:
+            logging.getLogger("jarvis").warning("audio illisible (%s octets)", len(blob))
+            raise HTTPException(400, "vocal illisible")
         if not text:
             raise HTTPException(400, "vocal vide ou inaudible")
         prompt = f"[Mini App Jarvis, VOCAL transcrit de {user.get('first_name','Greg')}] {text}"

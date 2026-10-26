@@ -313,7 +313,7 @@ const reactorEl = $('reactor'), coreEl = reactorEl.querySelector('.core');
 const retryMic = $('retryMic');
 retryMic.onclick = () => contStart();
 let contOn = false, contStream = null, contAnalyser = null, contRAF = 0;
-let contRec = null, contChunks = [], contState = 'listening';   // listening | busy
+let contRec = null, contChunks = [], contState = 'listening', contVoiced = 0;   // listening | busy
 let noiseFloor = 0.006, speechStart = 0, lastVoice = 0, eyeLvl = 0;
 const TD = new Uint8Array(512);
 
@@ -358,7 +358,7 @@ function contStopAll() {
   contRec = null;
   if (contStream) { contStream.getTracks().forEach(t => t.stop()); contStream = null; }
   cancelAnimationFrame(contRAF); contRAF = 0;
-  contOn = false; speechStart = 0; eyeLvl = 0; mic.classList.remove('rec');
+  contOn = false; speechStart = 0; eyeLvl = 0; contVoiced = 0; mic.classList.remove('rec');
   coreEl.style.transform = ''; coreEl.style.filter = ''; reactorEl.style.filter = '';
   contState = 'listening';
   if (!curSrc && !curAudio) statusTo('SYSTÈME OPÉRATIONNEL');
@@ -384,25 +384,39 @@ function loopVU() {
   coreEl.style.filter = `brightness(${(1 + eyeLvl * 1.8).toFixed(2)})`;
   reactorEl.style.filter = `brightness(${(1 + eyeLvl * .6).toFixed(2)})`;
   if (contState !== 'listening') return;     // pas de détection pendant que Jarvis parle/travaille
-  if (rms > thr) {
-    if (!speechStart) {                      // début de parole → on enregistre
-      speechStart = Date.now(); lastVoice = speechStart; contChunks = [];
-      try {
-        contRec = new MediaRecorder(contStream);
-        contRec.ondataavailable = e => contChunks.push(e.data);
-        contRec.start();
-      } catch (e) { contRec = null; }
-      mic.classList.add('rec'); statusTo("🎤 J'ÉCOUTE…", 'listen');
-    } else lastVoice = Date.now();
+  const thrStart = Math.max(.045, noiseFloor * 4);   // démarrage : voix franche, pas le bruit ambiant
+  if (rms > thrStart) {
+    if (!speechStart) {                      // début de parole
+      speechStart = Date.now(); lastVoice = speechStart; contChunks = []; contVoiced = 0;
+    } else {
+      contVoiced++; lastVoice = Date.now();
+      if (!contRec && Date.now() - speechStart > 250) {   // parole soutenue ≥ 250 ms → on enregistre
+        try {
+          contRec = new MediaRecorder(contStream);
+          contRec.ondataavailable = e => contChunks.push(e.data);
+          contRec.start();
+        } catch (e) { contRec = null; }
+        mic.classList.add('rec'); statusTo("🎤 J'ÉCOUTE…", 'listen');
+      }
+    }
     if (Date.now() - speechStart > 30000) contFinish();       // garde-fou 30 s
-  } else if (speechStart && Date.now() - lastVoice > 2000) contFinish();   // 2 s de silence
+  } else if (speechStart) {
+    if (contRec && rms > thr) { lastVoice = Date.now(); contVoiced++; }   // suite de parole (seuil souple)
+    if (Date.now() - lastVoice > 2000) contFinish();   // 2 s de silence
+  }
 }
 
 function contFinish() {
   const dur = Date.now() - speechStart; speechStart = 0;
   mic.classList.remove('rec');
   if (contRec) { const rec = contRec; contRec = null; try { rec.stop(); } catch (e) {} }
-  if (dur < 700) { statusTo('TROP COURT — REPARLE', 'listen'); return; }
+  const frames = Math.max(1, Math.round(dur / 16.7));
+  const voicedRatio = contVoiced / frames;
+  contVoiced = 0;
+  if (dur < 700 || voicedRatio < 0.2) {       // trop court ou bruit ambiant sans parole
+    statusTo(dur < 700 ? 'TROP COURT — REPARLE' : 'BRUIT SEUL — PAS DE PAROLE', 'listen');
+    return;
+  }
   contState = 'busy';
   const blob = new Blob(contChunks, { type: contChunks.length ? contChunks[0].type : 'audio/webm' });
   contChunks = [];
@@ -415,6 +429,7 @@ async function contConversation(blob) {
   try {
     const r = await fetch('/api/stt', { method: 'POST', headers: { 'X-Init-Data': INIT }, body: fd });
     if (r.status === 401) { addMsg('jarvis', '⚠️ Session Telegram invalide.'); contResume(); return; }
+    if (!r.ok) { addMsg('jarvis', '🎤 Vocal illisible — réessaie en parlant plus près du micro.'); statusTo('VOCAL ILLISIBLE — REPARLE', 'listen'); contResume(); return; }
     const j = await r.json();
     const heard = (j.transcription || '').trim();
     if (!heard) {
