@@ -109,8 +109,15 @@ def action_briefing(chat_id):
 MENU = [[("🏠 Maison", "maison"), ("📊 Trading", "trading")],
         [("📄 Briefing", "briefing"), ("🎙️ Vocal", "vocal")]]
 
+APP_URL = ENV.get("JARVIS_APP_URL", "https://jarvis.spectrodom.xyz")
+
 def kb(menu=MENU):
     return [[{"text": t, "callback_data": c} for t, c in row] for row in menu]
+
+def reply_kb():
+    """Clavier persistant : lance la Mini App Jarvis (HUD plein écran)."""
+    return {"keyboard": [[{"text": "🤖 OUVRIR JARVIS", "web_app": {"url": APP_URL}}]],
+            "resize_keyboard": True, "is_persistent": True}
 
 WELCOME = (
     "🤖 *Jarvis en ligne*\n"
@@ -127,7 +134,12 @@ def handle_message(m):
     if not allowed(chat_id):
         log.warning("chat refusé: %s", chat_id); return
     if "text" in m["message"] and m["message"]["text"].startswith("/start"):
-        reply(chat_id, WELCOME, keyboard=kb())
+        payload = {"chat_id": chat_id, "text": WELCOME,
+                   "reply_markup": {"inline_keyboard": kb()}}
+        tg("sendMessage", payload)
+        tg("sendMessage", {"chat_id": chat_id,
+                           "text": "👇 Bouton permanent ci-dessous pour ouvrir l'app Jarvis.",
+                           "reply_markup": reply_kb()})
         return
     if "text" in m["message"]:
         brain_queue.put((chat_id, m["message"]["text"]))

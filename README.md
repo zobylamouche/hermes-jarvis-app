@@ -16,10 +16,21 @@ Puis :
 1. Crée ton bot : Telegram → **@BotFather** → `/newbot` (nom libre, username doit finir par `bot`)
 2. Copie le token dans `/opt/jarvis/.env` → `TELEGRAM_BOT_TOKEN=123456:ABC…` (chmod 600 déjà appliqué)
 3. Dans `.env`, mets ton chat id dans `ALLOWED_CHAT_IDS` (par défaut : celui du canal Home d'un Hermes existant ; pour un nouveau compte, écris d'abord un message à ton bot puis récupère l'id via l'update API)
-4. `systemctl enable --now jarvis-bot`
-5. Envoie `/start` à ton bot → le menu apparaît
+4. `systemctl enable --now jarvis-bot jarvis-app`
+5. **Mini App** : sous-domaine → `A jarvis.votredomaine.tld VOTRE_IP` + site nginx (proxy → 127.0.0.1:8010) + `certbot --nginx` ; mets `JARVIS_APP_URL=https://jarvis.votredomaine.tld` dans `.env`
+6. Envoie `/start` à ton bot → menu + bouton permanent **🤖 OUVRIR JARVIS**
 
-## Ce que le bot fait (Phase 1)
+## La Mini App (HUD façon Iron Man)
+
+Le bouton **🤖 OUVRIR JARVIS** lance la Mini App Telegram en plein écran :
+
+- Interface HUD : arc réacteur animé, style Stark Industries, en français
+- **Micro (maintenir pour parler)** → Whisper local (modèle *small*, français) → cerveau → réponse
+- Texte libre aussi
+- Auth Telegram native : la signature `initData` (HMAC) est vérifiée à chaque appel — personne d'autre ne peut utiliser l'API
+- 100 % local : STT Whisper sur ta machine, pas de service cloud tiers
+
+## Ce que le bot fait
 
 - 🏠 **Maison** — état des capteurs (via Home Assistant du serveur)
 - 📊 **Trading** — résumé des comptes FxRevolution / Alpaca paper (si présent)

@@ -34,11 +34,20 @@ else
   echo "→ .env existant conservé."
 fi
 
-# 3. détection du binaire hermes (pour le PATH du service)
+# 3. environnement python dédié (fastapi, uvicorn, faster-whisper)
+if [ ! -x "$PREFIX/venv/bin/python3" ]; then
+  echo "→ Création du venv Python + dépendances (quelques minutes)…"
+  python3 -m venv "$PREFIX/venv"
+  "$PREFIX/venv/bin/pip" -q install fastapi uvicorn python-multipart faster-whisper
+else
+  echo "→ venv existant conservé."
+fi
+
+# 4. détection du binaire hermes (pour le PATH du service)
 HERMES_PATH="$(command -v hermes 2>/dev/null || echo /usr/local/lib/hermes-agent/.hermes/bin/hermes)"
 HERMES_DIR="$(dirname "$HERMES_PATH")"
 
-# 4. unité systemd
+# 5. unité systemd — le bot + la Mini App
 cat > "/etc/systemd/system/${UNIT_NAME}.service" <<EOF
 [Unit]
 Description=Jarvis Bot (Telegram -> Hermes)
@@ -46,7 +55,7 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=$(command -v python3 || echo /usr/bin/python3) $PREFIX/bot.py
+ExecStart=$PREFIX/venv/bin/python3 $PREFIX/bot.py
 Restart=always
 RestartSec=10
 Environment=HOME=\$HOME
@@ -57,8 +66,27 @@ WorkingDirectory=$PREFIX
 WantedBy=multi-user.target
 EOF
 
+cat > "/etc/systemd/system/jarvis-app.service" <<EOF
+[Unit]
+Description=Jarvis Mini App (FastAPI, HUD Telegram)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=$PREFIX/venv/bin/python3 $PREFIX/app/server.py
+Restart=always
+RestartSec=10
+Environment=HOME=\$HOME
+Environment=PATH=$HERMES_DIR:/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=$PREFIX/app
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 systemctl daemon-reload
-echo "✅ Installé."
+echo "✅ Installé (bot + Mini App)."
 echo "   1) Remplis TELEGRAM_BOT_TOKEN dans $PREFIX/.env (chmod 600)"
-echo "   2) systemctl enable --now $UNIT_NAME"
-echo "   3) Envoie /start à ton bot dans Telegram"
+echo "   2) systemctl enable --now jarvis-bot jarvis-app"
+echo "   3) nginx : proxy du sous-domaine Mini App vers 127.0.0.1:8010 + certbot --nginx"
+echo "   4) Envoie /start à ton bot, puis bouton 'OUVRIR JARVIS'"
