@@ -178,7 +178,7 @@ function stopSpeaking() {
   if (curAudio) { curAudio.pause(); curAudio = null; }
   speakGate = Date.now();
   sbtn.style.display = 'none';
-  statusTo('SYSTÈME OPÉRATIONNEL');
+  statusTo('PRÊT');
 }
 sbtn.onclick = stopSpeaking;
 
@@ -201,9 +201,9 @@ async function speak(text, onDone) {
   if (!voiceOn || !text) { if (onDone) onDone(); return; }
   try {
     const r = await fetch('/api/tts', { method:'POST', headers: headers(), body: JSON.stringify({ text, voice: myVoice }) });
-    if (!r.ok) { statusTo('VOIX INDISPONIBLE — RÉESSAIE', 'think'); if (onDone) onDone(); return; }
+    if (!r.ok) { statusTo('VOIX INDISPONIBLE', 'think'); if (onDone) onDone(); return; }
     const buf = await r.arrayBuffer();
-    statusTo('JARVIS PARLE…', 'listen');
+    statusTo('JE PARLE…', 'listen');
     speakGate = Infinity;   // le VAD ne doit pas s'auto-écouter pendant la réponse
     sbtn.style.display = 'block';
     if (actx && actx.state === 'running') {
@@ -212,7 +212,7 @@ async function speak(text, onDone) {
       curSrc = actx.createBufferSource();
       curSrc.buffer = audio;
       curSrc.connect(actx.destination);
-      curSrc.onended = () => { sbtn.style.display = 'none'; speakGate = Date.now(); statusTo('SYSTÈME OPÉRATIONNEL'); if (onDone) onDone(); };
+      curSrc.onended = () => { sbtn.style.display = 'none'; speakGate = Date.now(); statusTo('PRÊT'); if (onDone) onDone(); };
       curSrc.start();
     } else {
       // repli : élément Audio classique (nécessite un geste récent)
@@ -220,7 +220,7 @@ async function speak(text, onDone) {
       if (curAudio) { curAudio.pause(); }
       curAudio = new Audio(URL.createObjectURL(blob));
       await curAudio.play();
-      curAudio.onended = () => { sbtn.style.display = 'none'; speakGate = Date.now(); statusTo('SYSTÈME OPÉRATIONNEL'); if (onDone) onDone(); };
+      curAudio.onended = () => { sbtn.style.display = 'none'; speakGate = Date.now(); statusTo('PRÊT'); if (onDone) onDone(); };
     }
   } catch (e) {
     // autoplay refusé : la réponse affichée est cliquable pour l'entendre
@@ -248,7 +248,7 @@ function addMsg(who, text) {
 function headers() { return { 'Content-Type': 'application/json', 'X-Init-Data': INIT }; }
 
 async function brain(text, bubble, onDone) {
-  statusTo('TRAITEMENT…', 'think');
+  statusTo('JE RÉFLÉCHIS…', 'think');
   bubble && addMsg('me', text);
   try {
     const r = await fetch('/api/chat', { method:'POST', headers: headers(), body: JSON.stringify({ text }) });
@@ -257,7 +257,7 @@ async function brain(text, bubble, onDone) {
     const reply = (j.reply || '').trim();
     if (!reply) {
       addMsg('jarvis', "🤖 Je n'ai pas de réponse — reformule ?");
-      statusTo('RÉPONSE VIDE', 'think');
+      statusTo('RIEN À RÉPONDRE', 'think');
       if (onDone) onDone();
       return;
     }
@@ -267,7 +267,7 @@ async function brain(text, bubble, onDone) {
     addMsg('jarvis', '🔌 Connexion perdue. Réessaie.');
     if (onDone) onDone();
   }
-  statusTo('SYSTÈME OPÉRATIONNEL');
+  statusTo('PRÊT');
 }
 
 $('send').onclick = () => { const v = txt.value.trim(); if (v) { txt.value = ''; brain(v, true); } };
@@ -287,7 +287,7 @@ async function startRec() {
       stream.getTracks().forEach(t => t.stop());
       recOn = false;
       const dur = Date.now() - recStart;
-      if (dur < 700) { statusTo('TROP COURT — RÉESSAIE'); return; }
+      if (dur < 700) { statusTo('TROP COURT — REPARLE'); return; }
       const blob = new Blob(chunks, { type: mediaRec.mimeType || 'audio/webm' });
       sendVoice(blob);
     };
@@ -303,7 +303,7 @@ function stopRec() {
 /* Gestes micro (choix Greg) : APPUI MAINTENU = parle-relâche (push-to-talk) · DOUBLE-TAP = discussion continue on/off */
 let pttTimer = null, pdown = 0, lastTap = 0;
 function toggleDiscussion() {
-  if (contOn) { contStopAll(); statusTo('DISCUSSION CONTINUE OFF — DOUBLE-TAP MICRO POUR REVENIR', 'listen'); }
+  if (contOn) { contStopAll(); statusTo('ÉCOUTE COUPÉE — DOUBLE-TAP POUR REMETTRE', 'listen'); }
   else { contStart(); }
 }
 mic.addEventListener('pointerdown', e => {
@@ -325,7 +325,7 @@ mic.addEventListener('pointercancel', () => {
 });
 
 async function sendVoice(blob) {
-  statusTo('TRANSCRIPTION…', 'think');
+  statusTo('JE TRANSCRIS…', 'think');
   const fd = new FormData();
   fd.append('file', blob, 'vocal.webm');
   try {
@@ -336,15 +336,15 @@ async function sendVoice(blob) {
     const heard = (j.transcription || '').trim();
     if (!heard) {
       addMsg('jarvis', "🎤 Je n'ai rien saisi — réessaie en parlant plus près du micro.");
-      statusTo('RIEN ENTENDU — RÉESSAIE', 'think');
+      statusTo('RIEN ENTENDU — REPARLE', 'listen');
       return;
     }
     addMsg('me', '🎤 ' + heard);
     // 2) cerveau sur la transcription
-    statusTo('TRAITEMENT…', 'think');
+    statusTo('JE RÉFLÉCHIS…', 'think');
     await brain(heard, false);
   } catch (e) { addMsg('jarvis', '🔌 Vocal perdu. Réessaie.'); }
-  statusTo('SYSTÈME OPÉRATIONNEL');
+  statusTo('PRÊT');
 }
 
 /* --- ŒIL DE JARVIS + ÉCOUTE PERMANENTE ---
@@ -387,7 +387,7 @@ async function contStart() {
   unlockAudio();
   retryMic.style.display = 'none';
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    statusTo('MICRO INDISPONIBLE ICI — OUVRE JARVIS VIA TELEGRAM WEB (CHROME)', 'think');
+    statusTo('PAS DE MICRO ICI — OUVRIS JARVIS VIA TELEGRAM', 'think');
     retryMic.style.display = 'block';
     return;
   }
@@ -397,10 +397,10 @@ async function contStart() {
   } catch (e) {
     const n = e && e.name || '';
     if (n === 'NotAllowedError' || n === 'SecurityError')
-      statusTo('MICRO REFUSÉ — AUTORISE TELEGRAM (ET WINDOWS) PUIS RELANCE', 'think');
+      statusTo('MICRO REFUSÉ — AUTORISE-LE', 'think');
     else if (n === 'NotFoundError' || n === 'DevicesNotFoundError')
       statusTo('AUCUN MICRO DÉTECTÉ SUR CET APPAREIL', 'think');
-    else statusTo('MICRO BLOQUÉ (' + n + ') — RELANCE OU CHANGE DE NAVIGATEUR', 'think');
+    else statusTo('MICRO BLOQUÉ — RELANCE LA PAGE', 'think');
     retryMic.style.display = 'block';
     return;
   }
@@ -411,7 +411,7 @@ async function contStart() {
   src.connect(contAnalyser);
   contOn = true;
   contState = 'listening'; lastVoice = Date.now(); noiseFloor = 0.006; speechStart = 0; eyeLvl = 0;
-  statusTo('MICRO ACTIF — PARLE, JE RÉPONDS APRÈS 2 S DE SILENCE', 'listen');
+  statusTo("J'ÉCOUTE — FAIS UN SILENCE QUAND TU AS FINI", 'listen');
   loopVU();
 }
 
@@ -423,7 +423,7 @@ function contStopAll() {
   contOn = false; speechStart = 0; eyeLvl = 0; contVoiced = 0; mic.classList.remove('rec');
   coreEl.style.transform = ''; coreEl.style.filter = ''; reactorEl.style.filter = '';
   contState = 'listening';
-  if (!curSrc && !curAudio) statusTo('SYSTÈME OPÉRATIONNEL');
+  if (!curSrc && !curAudio) statusTo('PRÊT');
 }
 
 function rmsLevel() {
@@ -476,7 +476,7 @@ function contFinish() {
   const voicedRatio = contVoiced / frames;
   contVoiced = 0;
   if (dur < 700 || voicedRatio < 0.25) {       // trop court ou bruit ambiant sans parole
-    statusTo(dur < 700 ? 'TROP COURT — REPARLE' : 'BRUIT SEUL — PAS DE PAROLE', 'listen');
+    statusTo(dur < 700 ? 'TROP COURT — REPARLE' : "DU BRUIT, PAS DE VOIX — REPARLE", 'listen');
     return;
   }
   contState = 'busy';
@@ -486,12 +486,12 @@ function contFinish() {
 }
 
 async function contConversation(blob) {
-  statusTo('TRANSCRIPTION…', 'think');
+  statusTo('JE TRANSCRIS…', 'think');
   const fd = new FormData(); fd.append('file', blob, 'vocal.webm');
   try {
     const r = await fetch('/api/stt', { method: 'POST', headers: { 'X-Init-Data': INIT }, body: fd });
     if (r.status === 401) { addMsg('jarvis', '⚠️ Session Telegram invalide.'); contResume(); return; }
-    if (!r.ok) { addMsg('jarvis', '🎤 Vocal illisible — réessaie en parlant plus près du micro.'); statusTo('VOCAL ILLISIBLE — REPARLE', 'listen'); contResume(); return; }
+    if (!r.ok) { addMsg('jarvis', '🎤 Vocal illisible — réessaie en parlant plus près du micro.'); statusTo("JE N'AI PAS COMPRIS — REPARLE", 'listen'); contResume(); return; }
     const j = await r.json();
     const heard = (j.transcription || '').trim();
     if (!heard) {
@@ -507,11 +507,11 @@ async function contConversation(blob) {
 function contResume() {
   if (!contOn) { contStopAll(); return; }
   contState = 'listening'; lastVoice = Date.now(); speechStart = 0;
-  if (!/^TOUCHE MA RÉPONSE/.test(status.textContent)) statusTo('MICRO ACTIF — JE RÉÉCOUTE', 'listen');
+  if (!/^TOUCHE MA RÉPONSE/.test(status.textContent)) statusTo('JE RÉÉCOUTE', 'listen');
 }
 
-addMsg('jarvis', `Bonjour ${tg.initDataUnsafe?.user?.first_name || ''} 🤖\nSystèmes en ligne. Je t'écoute en continu — parle, je réponds après 2 s de silence. Ou écris.`);
-statusTo('SYSTÈME OPÉRATIONNEL');
+addMsg('jarvis', `Bonjour ${tg.initDataUnsafe?.user?.first_name || ''} 🤖\nJe t'écoute en continu — parle, et quand tu as fini, fais 2 s de silence. Tu peux aussi m'écrire, ou maintenir le micro pour parler.`);
+statusTo('PRÊT');
 </script>
 </body>
 </html>
