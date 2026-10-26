@@ -280,18 +280,23 @@ const mic = $('mic');
 async function startRec() {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    mediaRec = new MediaRecorder(stream);
+    /* mime explicite : certains webviews Telegram (MAJ côté téléphone) produisent
+       un format par défaut illisible/ vide — on force webm/opus si supporté */
+    const mimes = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', ''];
+    const mime = mimes.find(m => !m || (window.MediaRecorder && MediaRecorder.isTypeSupported(m))) || '';
+    mediaRec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
     chunks = [];
-    mediaRec.ondataavailable = e => chunks.push(e.data);
+    mediaRec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
     mediaRec.onstop = () => {
       stream.getTracks().forEach(t => t.stop());
       recOn = false;
       const dur = Date.now() - recStart;
       if (dur < 700) { statusTo('TROP COURT — REPARLE'); return; }
       const blob = new Blob(chunks, { type: mediaRec.mimeType || 'audio/webm' });
+      if (blob.size < 2000) { statusTo('MICRO MUET — REPARLE PLUS FORT'); return; }
       sendVoice(blob);
     };
-    mediaRec.start(); recStart = Date.now(); recOn = true;
+    mediaRec.start(500); recStart = Date.now(); recOn = true;   // timeslice : chunks réguliers, pas seulement à l'arrêt
     mic.classList.add('rec'); statusTo('🎤 PARLE — RELÂCHE POUR ENVOYER', 'listen');
     /* aborte toute capture VAD en cours : le push-to-talk prend la main */
     if (speechStart) { speechStart = 0; if (contRec) { const r0 = contRec; contRec = null; try { r0.stop(); } catch (e) {} } contVoiced = 0; }

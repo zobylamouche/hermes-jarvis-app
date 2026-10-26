@@ -248,7 +248,14 @@ async def api_stt(request: Request, file: UploadFile):
     suffix = os.path.splitext(file.filename or "v.webm")[1] or ".webm"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir="/tmp") as tmp:
         blob = await file.read()
+        logging.getLogger("jarvis").info("STT reçu : %s octets", len(blob))
         if len(blob) < 2048:
+            try:   # capture même les blobs trop petits, pour diagnostic
+                os.makedirs("/opt/jarvis/bad_audio", exist_ok=True)
+                with open("/opt/jarvis/bad_audio/%d.tiny" % int(time.time()), "wb") as f:
+                    f.write(blob)
+            except OSError:
+                pass
             raise HTTPException(400, "vocal trop court")
         tmp.write(blob)
         audio_path = tmp.name
@@ -277,7 +284,14 @@ async def api_voice(request: Request, file: UploadFile, note: str = Form("")):
     suffix = os.path.splitext(file.filename or "v.webm")[1] or ".webm"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir="/tmp") as tmp:
         blob = await file.read()
+        logging.getLogger("jarvis").info("STT reçu : %s octets", len(blob))
         if len(blob) < 2048:
+            try:   # capture même les blobs trop petits, pour diagnostic
+                os.makedirs("/opt/jarvis/bad_audio", exist_ok=True)
+                with open("/opt/jarvis/bad_audio/%d.tiny" % int(time.time()), "wb") as f:
+                    f.write(blob)
+            except OSError:
+                pass
             raise HTTPException(400, "vocal trop court")
         tmp.write(blob)
         audio_path = tmp.name
