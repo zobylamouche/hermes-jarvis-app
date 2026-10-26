@@ -36,20 +36,29 @@ BOT_TOKEN = ENV.get("TELEGRAM_BOT_TOKEN", "")
 if not BOT_TOKEN:
     raise SystemExit("TELEGRAM_BOT_TOKEN manquant — Jarvis App refuse de démarrer")
 
+# tokens additionnels : la Mini App peut aussi être ouverte depuis le bot principal
+# (clavier du canal Home) — chaque ouverture est signée avec le token du bot émetteur.
+EXTRA_BOT_TOKENS = [t.strip() for t in ENV.get("JARVIS_EXTRA_BOT_TOKENS", "").split(",") if t.strip()]
+ALL_BOT_TOKENS = [BOT_TOKEN] + EXTRA_BOT_TOKENS
+
 app = FastAPI(title="Jarvis Mini App", docs_url=None, redoc_url=None)
 
 # ---------- validation Telegram initData ----------
 def validate_init_data(init_data: str) -> dict:
-    """Vérifie la signature HMAC du initData Telegram Mini App. Lève 401 sinon."""
+    """Vérifie la signature HMAC du initData Telegram Mini App. Lève 401 sinon.
+    Accepte la signature de tout bot autorisé (Jarvis + bots supplémentaires)."""
     try:
         parsed = dict(urllib.parse.parse_qsl(init_data, strict_parsing=False))
         received_hash = parsed.pop("hash", None)
         if not received_hash:
             raise ValueError("hash absent")
         data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(parsed.items()))
-        secret_key = hmac.new(b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256).digest()
-        computed = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(computed, received_hash):
+        for token in ALL_BOT_TOKENS:
+            secret_key = hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
+            computed = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
+            if hmac.compare_digest(computed, received_hash):
+                break
+        else:
             raise ValueError("signature invalide")
         # anti-replay : initData de moins de 24 h
         auth_date = int(parsed.get("auth_date", "0"))
@@ -87,7 +96,13 @@ def transcribe(audio_path: str) -> str:
         if _whisper is None:
             from faster_whisper import WhisperModel
             _whisper = WhisperModel("small", device="cpu", compute_type="int8")
-        segments, _ = _whisper.transcribe(audio_path, language="fr", beam_size=5)
+        segments, _ = _whisper.transcribe(
+            audio_path, language="fr", beam_size=1,
+            vad_filter=True,                      # coupe les silences : tue l'hallucination
+            vad_parameters={"min_silence_duration_ms": 500},
+            condition_on_previous_text=False,     # pas d'auto-répétition en boucle
+            no_speech_threshold=0.6, log_prob_threshold=-1.0,
+        )
         return " ".join(s.text.strip() for s in segments).strip()
 
 # ---------- routes ----------

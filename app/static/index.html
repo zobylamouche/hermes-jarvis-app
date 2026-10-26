@@ -172,14 +172,13 @@ async function sendVoice(blob) {
   const fd = new FormData();
   fd.append('file', blob, 'vocal.webm');
   try {
+    // /api/voice renvoie déjà {transcription, reply} : UN seul appel cerveau
     const r = await fetch('/api/voice', { method:'POST', headers: { 'X-Init-Data': INIT }, body: fd });
     if (r.status === 401) { addMsg('jarvis', '⚠️ Session Telegram invalide.'); return; }
     const j = await r.json();
     addMsg('me', '🎤 ' + (j.transcription || '…'));
     statusTo('TRAITEMENT…', 'think');
-    const r2 = await fetch('/api/chat', { method:'POST', headers: headers(), body: JSON.stringify({ text: j.transcription }) });
-    const j2 = await r2.json();
-    addMsg('jarvis', j2.reply || '…');
+    addMsg('jarvis', j.reply || '…');
   } catch (e) { addMsg('jarvis', '🔌 Vocal perdu. Réessaie.'); }
   statusTo('SYSTÈME OPÉRATIONNEL');
 }
