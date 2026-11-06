@@ -60,6 +60,16 @@ header .s { font-size:10px; color:#5a8a96; letter-spacing:2px; margin-top:2px; }
 #voicemodel { position:absolute; top:12px; right:64px; width:44px; height:44px; border-radius:50%;
   border:1px solid rgba(0,229,255,.35); background:rgba(0,229,255,.08); color:var(--cy);
   font-size:17px; cursor:pointer; }
+#trader { position:absolute; top:12px; right:168px; width:44px; height:44px; border-radius:50%;
+  border:1px solid rgba(0,229,255,.35); background:rgba(0,229,255,.08); color:var(--cy);
+  font-size:17px; cursor:pointer; }
+#traderPanel { position:absolute; top:64px; right:12px; z-index:6; width:270px; max-height:62vh;
+  overflow-y:auto; padding:12px; display:none;
+  border:1px solid rgba(0,229,255,.3); border-radius:12px; background:rgba(2,4,7,.94);
+  font-size:11px; line-height:1.6; letter-spacing:.5px; color:#bfe8f2; text-align:left; }
+#traderPanel .t { color:var(--cy); letter-spacing:2px; font-size:11px; margin-bottom:6px; }
+#traderPanel pre { white-space:pre-wrap; font-family:inherit; margin:0; color:#bfe8f2; }
+#traderPanel .err { color:#ff5470; }
 #stopvoice { position:absolute; top:12px; left:12px; width:44px; height:44px; border-radius:50%;
   border:1px solid #ff5470; background:rgba(255,84,112,.1); color:#ff5470;
   font-size:16px; cursor:pointer; display:none; }
@@ -114,6 +124,8 @@ header .s { font-size:10px; color:#5a8a96; letter-spacing:2px; margin-top:2px; }
   <button id="voicemodel" title="Changer de voix">🎚</button>
   <button id="stopvoice" title="Stopper la voix">⏹</button>
   <button id="gear" title="Réglage sensibilité micro">⚙</button>
+  <button id="trader" title="Tableau de bord day trader">📈</button>
+  <div id="traderPanel"><div class="t">📊 DAY TRADER</div><pre id="traderBody">CHARGEMENT…</pre></div>
   <div id="sensPanel" style="display:none">SENSIBILITÉ MICRO <span class="val" id="sensVal">100%</span>
     <input id="sens" type="range" min="0.4" max="2.5" step="0.1" value="1">
     <div>← PEU SENSIBLE · TRÈS SENSIBLE →</div>
@@ -369,6 +381,28 @@ if (!isFinite(sens) || sens < .2) sens = 1;
 const gear = $('gear'), sensPanel = $('sensPanel'), sensIn = $('sens'), sensVal = $('sensVal');
 sensIn.value = sens; sensVal.textContent = Math.round(sens * 100) + '%';
 gear.onclick = () => { sensPanel.style.display = sensPanel.style.display === 'none' ? 'block' : 'none'; };
+
+// --- Tableau de bord day trader (données locales, aucun appel cerveau) ---
+const traderPanel = $('traderPanel'), traderBody = $('traderBody');
+async function openTrader() {
+  sensPanel.style.display = 'none';  // évite le chevauchement des 2 panneaux
+  traderPanel.style.display = 'block';
+  traderBody.classList.remove('err');
+  traderBody.textContent = 'CHARGEMENT…';
+  try {
+    const r = await fetch('/api/trader', { method: 'POST', headers: headers(), body: '{}' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    traderBody.textContent = (d.texte || JSON.stringify(d, null, 1)) + '\n— ' + (d.genere || '').replace('T', ' ').slice(0, 16) + ' UTC';
+  } catch (e) {
+    traderBody.classList.add('err');
+    traderBody.textContent = 'DONNÉES INDISPONIBLES — réessaie dans un instant.';
+  }
+}
+$('trader').onclick = () => {
+  if (traderPanel.style.display === 'block') { traderPanel.style.display = 'none'; return; }
+  openTrader();
+};
 sensIn.oninput = () => {
   const v = parseFloat(sensIn.value);
   if (!isFinite(v) || v < .2) return;

@@ -259,6 +259,24 @@ async def api_chat(request: Request):
     reply = await run_in_threadpool(brain, f"[Mini App Jarvis, message de {user.get('first_name','Greg')}] {text}")
     return JSONResponse({"reply": reply})
 
+# Tableau de bord day-trader : snapshot JSON 100% local (aucun LLM, zéro token).
+# Le script régénère trader/dashboard.json (stdlib, ~ms) si le cache a plus de 15 min.
+DASHBOARD = "/root/.hermes/skills/trading/trader/dashboard.json"
+DASH_TTL = 900
+
+@app.post("/api/trader")
+async def api_trader(request: Request):
+    validate_init_data(request.headers.get("X-Init-Data", ""))
+    def _snap():
+        if not os.path.exists(DASHBOARD) or time.time() - os.path.getmtime(DASHBOARD) > DASH_TTL:
+            subprocess.run(
+                ["python3", "/root/.hermes/skills/trading/trader_dashboard.py", "--quiet"],
+                check=True, timeout=30, capture_output=True,
+            )
+        with open(DASHBOARD, encoding="utf-8") as f:
+            return json.load(f)
+    return JSONResponse(await run_in_threadpool(_snap))
+
 @app.post("/api/stt")
 async def api_stt(request: Request, file: UploadFile):
     """Transcription seule (rapide) — le front affiche le texte tout de suite,
